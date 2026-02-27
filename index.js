@@ -3,8 +3,8 @@ const { Telegraf, Markup } = require("telegraf");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// временное хранение (потом заменим на БД)
-const state = new Map(); // key: tg_user_id -> { role, subject, teacher: { price } }
+// временно в памяти (потом БД)
+const state = new Map(); // tg_user_id -> { role, subject, step, teacher: { price, bio } }
 
 const SUBJECTS = [
   { key: "math", label: "Математика" },
@@ -94,13 +94,12 @@ bot.action(/T_SUBJECT_(.+)/, async (ctx) => {
   const { userId, data } = getUser(ctx);
   const subject = ctx.match[1];
 
-  const next = {
+  state.set(userId, {
     ...data,
     subject,
     step: "T_WAIT_PRICE",
     teacher: { ...(data.teacher || {}) },
-  };
-  state.set(userId, next);
+  });
 
   const subjLabel = SUBJECTS.find((s) => s.key === subject)?.label || subject;
 
@@ -111,34 +110,55 @@ bot.action(/T_SUBJECT_(.+)/, async (ctx) => {
   );
 });
 
-// Ловим текст, когда ожидаем цену
+// ловим текст для цены/описания
 bot.on("text", async (ctx) => {
   const { userId, data } = getUser(ctx);
+  const text = (ctx.message.text || "").trim();
 
-  // если мы не в шаге цены — игнорируем
-  if (data.step !== "T_WAIT_PRICE") return;
+  // 1) ждём цену
+  if (data.step === "T_WAIT_PRICE") {
+    const num = parseInt(text.replace(/[^\d]/g, ""), 10);
 
-  const raw = (ctx.message.text || "").trim();
+    if (!Number.isFinite(num) || num <= 0) {
+      await ctx.reply("Не понял цену. Напиши только число, например: 400");
+      return;
+    }
 
-  // достаём число (разрешим "400", "400 грн", "400uah")
-  const num = parseInt(raw.replace(/[^\d]/g, ""), 10);
+    state.set(userId, {
+      ...data,
+      step: "T_WAIT_BIO",
+      teacher: { ...(data.teacher || {}), price: num },
+    });
 
-  if (!Number.isFinite(num) || num <= 0) {
-    await ctx.reply("Не понял цену. Напиши только число, например: 400");
+    await ctx.reply(
+      `Цена сохранена ✅ ${num} грн / 60 мин\n\nТеперь напиши коротко о себе (1–3 предложения). Например:\n“Готовлю 5–11 класс, объясняю спокойно, даю домашки.”`
+    );
     return;
   }
 
-  const updated = {
-    ...data,
-    step: undefined,
-    teacher: { ...(data.teacher || {}), price: num },
-  };
-  state.set(userId, updated);
+  // 2) ждём описание
+  if (data.step === "T_WAIT_BIO") {
+    if (text.length < 10) {
+      await ctx.reply("Слишком коротко. Напиши хотя бы 1–2 предложения (от 10 символов).");
+      return;
+    }
+    if (text.length > 600) {
+      await ctx.reply("Слишком длинно. Уложись до 600 символов.");
+      return;
+    }
 
-  await ctx.reply(
-    `Цена сохранена ✅ ${num} грн / 60 мин\n\n(Следующий шаг: описание + опыт + расписание)`,
-    mainMenu("teacher")
-  );
+    state.set(userId, {
+      ...data,
+      step: undefined,
+      teacher: { ...(data.teacher || {}), bio: text },
+    });
+
+    await ctx.reply(
+      "Описание сохранено ✅\n\n(Следующий шаг: расписание + публикация анкеты)",
+      mainMenu("teacher")
+    );
+    return;
+  }
 });
 
 // ===== Продвижение (заглушка) =====
