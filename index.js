@@ -3,11 +3,9 @@ const fs = require("fs");
 const { Telegraf, Markup } = require("telegraf");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
-
-// Для оплаты картой нужен provider token из BotFather (Payments).
 const CARD_PROVIDER_TOKEN = process.env.CARD_PROVIDER_TOKEN || "";
 
-// ====== Простая "БД" в файле (чтобы не терялось после перезапуска) ======
+// ====== Простая "БД" в файле ======
 const DB_PATH = "./db.json";
 
 function loadDB() {
@@ -21,10 +19,10 @@ function loadDB() {
 function saveDB() {
   fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), "utf8");
 }
-const db = loadDB(); // { users: { [id]: { role, meta, teacher, promos } } }
+const db = loadDB();
 
-// runtime-сессии (шаги анкеты/покупки)
-const session = new Map(); // userId -> { step, pendingPromo, lastStudentSubject }
+// runtime-сессии (режим/шаги/покупки)
+const session = new Map(); // userId -> { mode, step, pendingPromo, lastStudentSubject }
 
 // ====== Константы ======
 const SUBJECTS = [
@@ -36,12 +34,11 @@ const SUBJECTS = [
 ];
 
 const PROMO_PACKS = [
-  { days: 7,  priceUah: 199,  priceStars: 120 },
-  { days: 30, priceUah: 499,  priceStars: 300 },
+  { days: 7, priceUah: 199, priceStars: 120 },
+  { days: 30, priceUah: 499, priceStars: 300 },
   { days: 90, priceUah: 1199, priceStars: 800 },
 ];
 
-// Ограничения (чтобы не было космос-цен)
 const PRICE_MIN = 50;
 const PRICE_MAX = 5000;
 const BIO_MIN = 10;
@@ -53,30 +50,20 @@ function subjLabel(key) {
 function nowMs() {
   return Date.now();
 }
-function isPromoActive(user, subjectKey) {
-  const p = user?.promos?.[subjectKey];
-  if (!p?.expiresAt) return false;
-  return new Date(p.expiresAt).getTime() > nowMs();
-}
 function fmtDate(iso) {
-  try { return new Date(iso).toLocaleString("uk-UA"); } catch { return iso; }
-}
-function truncate(s, n) {
-  s = (s || "").trim();
-  if (s.length <= n) return s;
-  return s.slice(0, n - 1) + "…";
+  try {
+    return new Date(iso).toLocaleString("uk-UA");
+  } catch {
+    return iso;
+  }
 }
 
 function getUser(userId) {
   db.users[userId] ||= {
-    role: null,
     meta: { first_name: "", username: "" },
-    teacher: {
-      subject: null,
-      price: null,
-      bio: null,
-      isActive: false,
-    },
+    lastMode: null, // 'teacher' | 'student'
+    teacher: { subject: null, price: null, bio: null, isActive: false },
+    student: {}, // на будущее
     promos: {}, // subjectKey -> { expiresAt, chargeId }
   };
   return db.users[userId];
@@ -86,7 +73,13 @@ function getSession(userId) {
   return session.get(userId);
 }
 
-// сохраняем имя/юзернейм всегда, когда человек что-то делает
+function isPromoActive(user, subjectKey) {
+  const p = user?.promos?.[subjectKey];
+  if (!p?.expiresAt) return false;
+  return new Date(p.expiresAt).getTime() > nowMs();
+}
+
+// сохраняем имя/юзернейм
 bot.use(async (ctx, next) => {
   if (ctx.from?.id) {
     const u = getUser(ctx.from.id);
@@ -98,24 +91,30 @@ bot.use(async (ctx, next) => {
 });
 
 // ====== Клавиатуры ======
-function mainMenu(role) {
-  if (role === "teacher") {
+function modeKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("👨‍🏫 Режим: Учитель", "MODE_TEACHER")],
+    [Markup.button.callback("🎓 Режим: Ученик", "MODE_STUDENT")],
+  ]);
+}
+
+function mainMenu(mode) {
+  if (mode === "teacher") {
     return Markup.inlineKeyboard([
       [Markup.button.callback("Заполнить/изменить анкету", "T_PROFILE")],
       [Markup.button.callback("Моя анкета", "T_SHOW_PROFILE")],
       [Markup.button.callback("Активна/Пауза", "T_TOGGLE_ACTIVE")],
       [Markup.button.callback("Продвижение (ТОП)", "T_PROMO")],
+      [Markup.button.callback("🔁 Сменить режим", "CHOOSE_MODE")],
     ]);
   }
-  if (role === "student") {
+  if (mode === "student") {
     return Markup.inlineKeyboard([
       [Markup.button.callback("Найти репетитора", "S_SEARCH")],
+      [Markup.button.callback("🔁 Сменить режим", "CHOOSE_MODE")],
     ]);
   }
-  return Markup.inlineKeyboard([
-    [Markup.button.callback("Я учитель", "ROLE_TEACHER")],
-    [Markup.button.callback("Я ученик", "ROLE_STUDENT")],
-  ]);
+  return modeKeyboard();
 }
 
 function subjectsKeyboard(prefix, extraButtons = []) {
@@ -151,9 +150,10 @@ function teacherCard(user) {
   const bio = t.bio ? t.bio : "—";
   const status = t.isActive ? "✅ Активна (в поиске)" : "⏸ Пауза (скрыта из поиска)";
 
-  const promoLine = t.subject && isPromoActive(user, t.subject)
-    ? `⭐ ТОП активен до ${fmtDate(user.promos[t.subject].expiresAt)}`
-    : "⭐ ТОП: —";
+  const promoLine =
+    t.subject && isPromoActive(user, t.subject)
+      ? `⭐ ТОП активен до ${fmtDate(user.promos[t.subject].expiresAt)}`
+      : "⭐ ТОП: —";
 
   return (
     `🧑‍🏫 Моя анкета\n\n` +
@@ -165,40 +165,56 @@ function teacherCard(user) {
   );
 }
 
-function makeChatUrl(u) {
-  const username = u?.meta?.username;
-  if (username) return `https://t.me/${username}`;
-  // запасной вариант (не всегда работает на всех клиентах, но пусть будет)
-  return `tg://user?id=${u?.meta?.id || ""}`;
-}
-
-// ====== /start ======
+// ====== /start ВСЕГДА спрашивает режим ======
 bot.start(async (ctx) => {
-  const user = getUser(ctx.from.id);
-  await ctx.reply("Главное меню:", mainMenu(user.role));
+  await ctx.reply("Кто ты сейчас? Выбери режим:", modeKeyboard());
 });
 
-// ====== Роли ======
-bot.action("ROLE_TEACHER", async (ctx) => {
+bot.action("CHOOSE_MODE", async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText("Кто ты сейчас? Выбери режим:", modeKeyboard());
+});
+
+// ====== Выбор режима ======
+bot.action("MODE_TEACHER", async (ctx) => {
   const user = getUser(ctx.from.id);
-  user.role = "teacher";
+  const s = getSession(ctx.from.id);
+
+  s.mode = "teacher";
+  user.lastMode = "teacher";
   saveDB();
 
   await ctx.answerCbQuery();
-  await ctx.editMessageText("Роль сохранена: Учитель ✅\n\nГлавное меню:", mainMenu("teacher"));
+  await ctx.editMessageText("Режим: Учитель ✅\n\nГлавное меню:", mainMenu("teacher"));
 });
 
-bot.action("ROLE_STUDENT", async (ctx) => {
+bot.action("MODE_STUDENT", async (ctx) => {
   const user = getUser(ctx.from.id);
-  user.role = "student";
+  const s = getSession(ctx.from.id);
+
+  s.mode = "student";
+  user.lastMode = "student";
   saveDB();
 
   await ctx.answerCbQuery();
-  await ctx.editMessageText("Роль сохранена: Ученик ✅\n\nГлавное меню:", mainMenu("student"));
+  await ctx.editMessageText("Режим: Ученик ✅\n\nГлавное меню:", mainMenu("student"));
+});
+
+// ====== BACK_MENU — возвращаемся в меню текущего режима ======
+bot.action("BACK_MENU", async (ctx) => {
+  const s = getSession(ctx.from.id);
+  await ctx.answerCbQuery();
+  await ctx.editMessageText("Главное меню:", mainMenu(s.mode));
 });
 
 // ====== Учитель: анкета ======
 bot.action("T_PROFILE", async (ctx) => {
+  const s = getSession(ctx.from.id);
+  if (s.mode !== "teacher") {
+    await ctx.answerCbQuery();
+    await ctx.reply("Ты не в режиме Учителя. Нажми /start и выбери режим Учитель.");
+    return;
+  }
   await ctx.answerCbQuery();
   await ctx.editMessageText(
     "Анкета учителя — выбери предмет:",
@@ -207,9 +223,11 @@ bot.action("T_PROFILE", async (ctx) => {
 });
 
 bot.action(/T_SUBJECT_(.+)/, async (ctx) => {
+  const s = getSession(ctx.from.id);
+  if (s.mode !== "teacher") return;
+
   const subject = ctx.match[1];
   const user = getUser(ctx.from.id);
-  const s = getSession(ctx.from.id);
 
   user.teacher.subject = subject;
   saveDB();
@@ -224,12 +242,18 @@ bot.action(/T_SUBJECT_(.+)/, async (ctx) => {
 });
 
 bot.action("T_SHOW_PROFILE", async (ctx) => {
+  const s = getSession(ctx.from.id);
+  if (s.mode !== "teacher") return;
+
   const user = getUser(ctx.from.id);
   await ctx.answerCbQuery();
   await ctx.editMessageText(teacherCard(user), backMenuKeyboard());
 });
 
 bot.action("T_TOGGLE_ACTIVE", async (ctx) => {
+  const s = getSession(ctx.from.id);
+  if (s.mode !== "teacher") return;
+
   const user = getUser(ctx.from.id);
   user.teacher.isActive = !user.teacher.isActive;
   saveDB();
@@ -243,13 +267,19 @@ bot.action("T_TOGGLE_ACTIVE", async (ctx) => {
 
 // ====== Учитель: ТОП ======
 bot.action("T_PROMO", async (ctx) => {
+  const s = getSession(ctx.from.id);
+  if (s.mode !== "teacher") return;
+
   const user = getUser(ctx.from.id);
   await ctx.answerCbQuery();
 
   if (!user.teacher.subject) {
     await ctx.editMessageText(
       "Чтобы купить ТОП, сначала выбери предмет в анкете.",
-      Markup.inlineKeyboard([[Markup.button.callback("Заполнить анкету", "T_PROFILE")], [Markup.button.callback("⬅️ В меню", "BACK_MENU")]])
+      Markup.inlineKeyboard([
+        [Markup.button.callback("Заполнить анкету", "T_PROFILE")],
+        [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
+      ])
     );
     return;
   }
@@ -266,15 +296,17 @@ bot.action("T_PROMO", async (ctx) => {
 });
 
 bot.action(/PROMO_DAYS_(\d+)/, async (ctx) => {
+  const s = getSession(ctx.from.id);
+  if (s.mode !== "teacher") return;
+
   const days = parseInt(ctx.match[1], 10);
   const pack = PROMO_PACKS.find((p) => p.days === days);
   const user = getUser(ctx.from.id);
-  const s = getSession(ctx.from.id);
 
   await ctx.answerCbQuery();
 
   if (!pack || !user.teacher.subject) {
-    await ctx.editMessageText("Ошибка выбора пакета. Открой Продвижение заново.", mainMenu(user.role));
+    await ctx.editMessageText("Ошибка выбора пакета. Открой Продвижение заново.", mainMenu("teacher"));
     return;
   }
 
@@ -293,12 +325,10 @@ bot.action(/PROMO_DAYS_(\d+)/, async (ctx) => {
 
 bot.action("PROMO_PAY_STARS", async (ctx) => {
   const s = getSession(ctx.from.id);
-  await ctx.answerCbQuery();
+  if (s.mode !== "teacher") return;
 
-  if (!s.pendingPromo) {
-    await ctx.reply("Сначала выбери срок ТОП.");
-    return;
-  }
+  await ctx.answerCbQuery();
+  if (!s.pendingPromo) return ctx.reply("Сначала выбери срок ТОП.");
 
   const p = s.pendingPromo;
   const payload = `promo|${ctx.from.id}|${p.subject}|${p.days}|stars|${Date.now()}`;
@@ -307,7 +337,7 @@ bot.action("PROMO_PAY_STARS", async (ctx) => {
     title: "ТОП репетитора",
     description: `ТОП по предмету: ${subjLabel(p.subject)} на ${p.days} дней`,
     payload,
-    provider_token: "", // Stars
+    provider_token: "",
     currency: "XTR",
     prices: [{ label: `ТОП ${p.days} дней`, amount: p.priceStars }],
   });
@@ -315,16 +345,15 @@ bot.action("PROMO_PAY_STARS", async (ctx) => {
 
 bot.action("PROMO_PAY_CARD", async (ctx) => {
   const s = getSession(ctx.from.id);
+  if (s.mode !== "teacher") return;
+
   await ctx.answerCbQuery();
 
   if (!CARD_PROVIDER_TOKEN) {
     await ctx.reply("Оплата картой не настроена. Позже добавим CARD_PROVIDER_TOKEN в .env.");
     return;
   }
-  if (!s.pendingPromo) {
-    await ctx.reply("Сначала выбери срок ТОП.");
-    return;
-  }
+  if (!s.pendingPromo) return ctx.reply("Сначала выбери срок ТОП.");
 
   const p = s.pendingPromo;
   const payload = `promo|${ctx.from.id}|${p.subject}|${p.days}|card|${Date.now()}`;
@@ -347,11 +376,7 @@ bot.on("successful_payment", async (ctx) => {
   const sp = ctx.message.successful_payment;
   const payload = sp.invoice_payload || "";
   const parts = payload.split("|");
-
-  if (parts[0] !== "promo") {
-    await ctx.reply("Оплата получена ✅");
-    return;
-  }
+  if (parts[0] !== "promo") return ctx.reply("Оплата получена ✅");
 
   const userId = parts[1];
   const subject = parts[2];
@@ -369,8 +394,15 @@ bot.on("successful_payment", async (ctx) => {
   );
 });
 
-// ====== Ученик: поиск + выдача + ТОП-блок ======
+// ====== Ученик: поиск + выдача ======
 bot.action("S_SEARCH", async (ctx) => {
+  const s = getSession(ctx.from.id);
+  if (s.mode !== "student") {
+    await ctx.answerCbQuery();
+    await ctx.reply("Ты не в режиме Ученика. Нажми /start и выбери режим Ученик.");
+    return;
+  }
+
   await ctx.answerCbQuery();
   await ctx.editMessageText(
     "Выбери предмет:",
@@ -380,11 +412,11 @@ bot.action("S_SEARCH", async (ctx) => {
 
 function listTeachersBySubject(subjectKey) {
   const all = Object.entries(db.users).map(([id, u]) => ({ id, u }));
+
   const teachers = all
-    .filter(({ u }) => u.role === "teacher")
     .filter(({ u }) => u.teacher?.isActive)
     .filter(({ u }) => u.teacher?.subject === subjectKey)
-    .filter(({ u }) => u.teacher?.price && u.teacher?.bio); // чтобы были заполнены
+    .filter(({ u }) => u.teacher?.price && u.teacher?.bio);
 
   const top = teachers.filter(({ u }) => isPromoActive(u, subjectKey));
   const regular = teachers.filter(({ u }) => !isPromoActive(u, subjectKey));
@@ -393,8 +425,10 @@ function listTeachersBySubject(subjectKey) {
 }
 
 bot.action(/S_SUBJECT_(.+)/, async (ctx) => {
-  const subject = ctx.match[1];
   const s = getSession(ctx.from.id);
+  if (s.mode !== "student") return;
+
+  const subject = ctx.match[1];
   s.lastStudentSubject = subject;
 
   await ctx.answerCbQuery();
@@ -403,21 +437,19 @@ bot.action(/S_SUBJECT_(.+)/, async (ctx) => {
 
   const buttons = [];
 
-  // ТОП блок
   if (top.length) {
     buttons.push([Markup.button.callback("⭐ ТОП репетиторы", "S_IGNORE")]);
-    top.slice(0, 5).forEach(({ id, u }, idx) => {
-      const name = u.meta?.first_name || `Учитель #${idx + 1}`;
+    top.slice(0, 5).forEach(({ id, u }) => {
+      const name = u.meta?.first_name || "Учитель";
       const price = u.teacher?.price ? `${u.teacher.price}грн` : "";
       buttons.push([Markup.button.callback(`⭐ ${name} — ${price}`, `S_VIEW_${id}`)]);
     });
   }
 
-  // Обычные
   if (regular.length) {
     buttons.push([Markup.button.callback("Обычные", "S_IGNORE")]);
-    regular.slice(0, 10).forEach(({ id, u }, idx) => {
-      const name = u.meta?.first_name || `Учитель #${idx + 1}`;
+    regular.slice(0, 10).forEach(({ id, u }) => {
+      const name = u.meta?.first_name || "Учитель";
       const price = u.teacher?.price ? `${u.teacher.price}грн` : "";
       buttons.push([Markup.button.callback(`${name} — ${price}`, `S_VIEW_${id}`)]);
     });
@@ -425,7 +457,7 @@ bot.action(/S_SUBJECT_(.+)/, async (ctx) => {
 
   if (!top.length && !regular.length) {
     await ctx.editMessageText(
-      `По предмету “${subjLabel(subject)}” пока нет активных анкет.\n\n(Позже добавим: оставить заявку, чтобы учителя откликались)`,
+      `По предмету “${subjLabel(subject)}” пока нет активных анкет.`,
       backMenuKeyboard()
     );
     return;
@@ -439,18 +471,18 @@ bot.action(/S_SUBJECT_(.+)/, async (ctx) => {
   );
 });
 
-// “пустая” кнопка (чтобы заголовки не ругались)
-bot.action("S_IGNORE", async (ctx) => {
-  await ctx.answerCbQuery();
-});
+bot.action("S_IGNORE", async (ctx) => ctx.answerCbQuery());
 
 bot.action(/S_VIEW_(\d+)/, async (ctx) => {
+  const s = getSession(ctx.from.id);
+  if (s.mode !== "student") return;
+
   const teacherId = ctx.match[1];
   const teacher = db.users[teacherId];
 
   await ctx.answerCbQuery();
 
-  if (!teacher || teacher.role !== "teacher") {
+  if (!teacher) {
     await ctx.editMessageText("Учитель не найден.", backMenuKeyboard());
     return;
   }
@@ -460,10 +492,13 @@ bot.action(/S_VIEW_(\d+)/, async (ctx) => {
   const bio = teacher.teacher?.bio ? teacher.teacher.bio : "—";
   const subject = subjLabel(teacher.teacher?.subject);
 
-  const isTop = teacher.teacher?.subject ? isPromoActive(teacher, teacher.teacher.subject) : false;
+  const subjKey = teacher.teacher?.subject;
+  const isTop = subjKey ? isPromoActive(teacher, subjKey) : false;
+  const topUntil = isTop ? teacher.promos?.[subjKey]?.expiresAt : null;
+  const topLine = isTop && topUntil ? `⭐ ТОП активен до ${fmtDate(topUntil)}\n` : (isTop ? "⭐ ТОП\n" : "");
 
   const text =
-    `${isTop ? "⭐ ТОП\n" : ""}` +
+    `${topLine}` +
     `👤 ${name}\n` +
     `Предмет: ${subject}\n` +
     `Цена: ${price}\n\n` +
@@ -473,32 +508,30 @@ bot.action(/S_VIEW_(\d+)/, async (ctx) => {
     text,
     Markup.inlineKeyboard([
       [Markup.button.callback("Отправить заявку", `S_REQ_${teacherId}`)],
-      [Markup.button.callback("⬅️ Назад к списку", `S_SUBJECT_${getSession(ctx.from.id).lastStudentSubject || teacher.teacher.subject}`)],
+      [Markup.button.callback("⬅️ Назад к списку", `S_SUBJECT_${s.lastStudentSubject || teacher.teacher.subject}`)],
       [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
     ])
   );
 });
 
 bot.action(/S_REQ_(\d+)/, async (ctx) => {
+  const s = getSession(ctx.from.id);
+  if (s.mode !== "student") return;
+
   const teacherId = ctx.match[1];
   const teacher = db.users[teacherId];
   const student = getUser(ctx.from.id);
 
   await ctx.answerCbQuery();
-
-  if (!teacher || teacher.role !== "teacher") {
-    await ctx.reply("Учитель не найден.");
-    return;
-  }
+  if (!teacher) return ctx.reply("Учитель не найден.");
 
   const studentName = student.meta?.first_name || "Ученик";
-  const subject = getSession(ctx.from.id).lastStudentSubject || teacher.teacher.subject;
+  const subject = s.lastStudentSubject || teacher.teacher.subject;
 
-  // сообщение учителю
   try {
     await bot.telegram.sendMessage(
       teacherId,
-      `📩 Новая заявка\nОт: ${studentName}\nПредмет: ${subjLabel(subject)}\n\nОткрой чат со студентом и договорись:`,
+      `📩 Новая заявка\nОт: ${studentName}\nПредмет: ${subjLabel(subject)}\n\nОткрой чат со студентом:`,
       Markup.inlineKeyboard([
         [Markup.button.url("Открыть чат", student.meta?.username ? `https://t.me/${student.meta.username}` : `tg://user?id=${ctx.from.id}`)],
       ])
@@ -507,30 +540,22 @@ bot.action(/S_REQ_(\d+)/, async (ctx) => {
     // если учитель не писал боту — Telegram не даст отправить
   }
 
-  await ctx.editMessageText(
-    "Заявка отправлена ✅\n\nЕсли учитель разрешил сообщения боту — он получит уведомление.",
-    backMenuKeyboard()
-  );
+  await ctx.editMessageText("Заявка отправлена ✅", backMenuKeyboard());
 });
 
-// ====== Текстовые шаги анкеты (цена/описание) ======
+// ====== Текстовые шаги анкеты учителя ======
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
   const user = getUser(userId);
   const s = getSession(userId);
   const text = (ctx.message.text || "").trim();
 
-  // цена
   if (s.step === "T_WAIT_PRICE") {
     const num = parseInt(text.replace(/[^\d]/g, ""), 10);
 
-    if (!Number.isFinite(num)) {
-      await ctx.reply(`Не понял цену. Напиши число (например 400).`);
-      return;
-    }
+    if (!Number.isFinite(num)) return ctx.reply("Не понял цену. Напиши число (например 400).");
     if (num < PRICE_MIN || num > PRICE_MAX) {
-      await ctx.reply(`Цена должна быть в диапазоне ${PRICE_MIN}–${PRICE_MAX} грн. Напиши заново.`);
-      return;
+      return ctx.reply(`Цена должна быть ${PRICE_MIN}–${PRICE_MAX} грн. Напиши заново.`);
     }
 
     user.teacher.price = num;
@@ -541,34 +566,18 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  // био
   if (s.step === "T_WAIT_BIO") {
-    if (text.length < BIO_MIN) {
-      await ctx.reply(`Слишком коротко. Напиши хотя бы от ${BIO_MIN} символов.`);
-      return;
-    }
-    if (text.length > BIO_MAX) {
-      await ctx.reply(`Слишком длинно. Уложись до ${BIO_MAX} символов.`);
-      return;
-    }
+    if (text.length < BIO_MIN) return ctx.reply(`Слишком коротко. Нужно от ${BIO_MIN} символов.`);
+    if (text.length > BIO_MAX) return ctx.reply(`Слишком длинно. До ${BIO_MAX} символов.`);
 
     user.teacher.bio = text;
     saveDB();
 
     s.step = null;
 
-    await ctx.reply(
-      `Описание сохранено ✅\n\nТеперь включи анкету в поиске: нажми “Активна/Пауза”.`,
-      mainMenu("teacher")
-    );
+    await ctx.reply("Описание сохранено ✅\n\nТеперь нажми “Активна/Пауза”, чтобы включиться в поиске.", mainMenu("teacher"));
     return;
   }
-});
-
-bot.action("BACK_MENU", async (ctx) => {
-  const user = getUser(ctx.from.id);
-  await ctx.answerCbQuery();
-  await ctx.editMessageText("Главное меню:", mainMenu(user.role));
 });
 
 bot.launch();
