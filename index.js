@@ -21,10 +21,27 @@ function getUser(ctx) {
   return { userId, data };
 }
 
+function subjLabel(key) {
+  return SUBJECTS.find((s) => s.key === key)?.label || key || "—";
+}
+
+function teacherCard(data) {
+  const t = data.teacher || {};
+  const subject = subjLabel(data.subject);
+  const price = t.price ? `${t.price} грн / 60 мин` : "—";
+  const bio = t.bio ? t.bio : "—";
+
+  return `🧑‍🏫 Моя анкета\n\n` +
+    `Предмет: ${subject}\n` +
+    `Цена: ${price}\n\n` +
+    `Описание:\n${bio}`;
+}
+
 function mainMenu(role) {
   if (role === "teacher") {
     return Markup.inlineKeyboard([
       [Markup.button.callback("Заполнить анкету", "T_PROFILE")],
+      [Markup.button.callback("Моя анкета", "T_SHOW_PROFILE")],
       [Markup.button.callback("Продвижение (ТОП)", "T_PROMO")],
     ]);
   }
@@ -75,11 +92,9 @@ bot.action(/S_SUBJECT_(.+)/, async (ctx) => {
   const subject = ctx.match[1];
   state.set(userId, { ...data, subject });
 
-  const subjLabel = SUBJECTS.find((s) => s.key === subject)?.label || subject;
-
   await ctx.answerCbQuery();
   await ctx.editMessageText(
-    `Ок. Предмет: ${subjLabel} ✅\n\n(Следующий шаг: фильтры + выдача + ТОП-блок)`,
+    `Ок. Предмет: ${subjLabel(subject)} ✅\n\n(Следующий шаг: фильтры + выдача + ТОП-блок)`,
     Markup.inlineKeyboard([[Markup.button.callback("⬅️ В меню", "BACK_MENU")]])
   );
 });
@@ -101,11 +116,20 @@ bot.action(/T_SUBJECT_(.+)/, async (ctx) => {
     teacher: { ...(data.teacher || {}) },
   });
 
-  const subjLabel = SUBJECTS.find((s) => s.key === subject)?.label || subject;
-
   await ctx.answerCbQuery();
   await ctx.editMessageText(
-    `Анкета: предмет — ${subjLabel} ✅\n\nТеперь введи цену за 60 минут (только число, грн). Например: 400`,
+    `Анкета: предмет — ${subjLabel(subject)} ✅\n\nТеперь введи цену за 60 минут (только число, грн). Например: 400`,
+    Markup.inlineKeyboard([[Markup.button.callback("⬅️ В меню", "BACK_MENU")]])
+  );
+});
+
+// ===== Учитель: показать анкету =====
+bot.action("T_SHOW_PROFILE", async (ctx) => {
+  const { data } = getUser(ctx);
+  await ctx.answerCbQuery();
+
+  await ctx.editMessageText(
+    teacherCard(data),
     Markup.inlineKeyboard([[Markup.button.callback("⬅️ В меню", "BACK_MENU")]])
   );
 });
@@ -115,7 +139,7 @@ bot.on("text", async (ctx) => {
   const { userId, data } = getUser(ctx);
   const text = (ctx.message.text || "").trim();
 
-  // 1) ждём цену
+  // 1) цена
   if (data.step === "T_WAIT_PRICE") {
     const num = parseInt(text.replace(/[^\d]/g, ""), 10);
 
@@ -131,12 +155,12 @@ bot.on("text", async (ctx) => {
     });
 
     await ctx.reply(
-      `Цена сохранена ✅ ${num} грн / 60 мин\n\nТеперь напиши коротко о себе (1–3 предложения). Например:\n“Готовлю 5–11 класс, объясняю спокойно, даю домашки.”`
+      `Цена сохранена ✅ ${num} грн / 60 мин\n\nТеперь напиши коротко о себе (1–3 предложения).`
     );
     return;
   }
 
-  // 2) ждём описание
+  // 2) описание
   if (data.step === "T_WAIT_BIO") {
     if (text.length < 10) {
       await ctx.reply("Слишком коротко. Напиши хотя бы 1–2 предложения (от 10 символов).");
@@ -153,10 +177,7 @@ bot.on("text", async (ctx) => {
       teacher: { ...(data.teacher || {}), bio: text },
     });
 
-    await ctx.reply(
-      "Описание сохранено ✅\n\n(Следующий шаг: расписание + публикация анкеты)",
-      mainMenu("teacher")
-    );
+    await ctx.reply("Описание сохранено ✅", mainMenu("teacher"));
     return;
   }
 });
