@@ -11,6 +11,7 @@ const { registerStudent } = require("./student");
 const { registerRequests } = require("./requests");
 const { registerProofs } = require("./proofs");
 const { registerPayments } = require("./payments");
+const { cleanupMiddleware, registerCleanCommands } = require("./clean");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const CARD_PROVIDER_TOKEN = process.env.CARD_PROVIDER_TOKEN || "";
@@ -31,8 +32,14 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
+bot.use(cleanupMiddleware(getSession));
+
+
 bot.command("myid", async (ctx) => {
   await ctx.reply(`Твій Telegram ID: ${ctx.from.id}`);
+
+registerCleanCommands(bot, getSession);
+
 });
 
 bot.start(async (ctx) => {
