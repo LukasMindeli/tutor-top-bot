@@ -1,9 +1,9 @@
 const { Markup } = require("telegraf");
 const { tgUserLink } = require("./helpers");
-const { sendLeadInvoiceStars, sendLeadInvoiceCard } = require("./payments");
 
 function registerRequests(bot, deps) {
-  const { store, ui, getUserSession, LIMITS, CARD_PROVIDER_TOKEN } = deps;
+  const { store, ui, getUserSession, LIMITS } = deps;
+  const MONO_LEAD_URL = String(process.env.MONO_LEAD_URL || "");
 
   bot.action(/S_REQ_(\d+)/, async (ctx) => {
     const s = getUserSession(ctx.from.id);
@@ -61,13 +61,22 @@ function registerRequests(bot, deps) {
       );
     } catch (e) {}
 
-    // учитель видит контакт ученика + кнопки добровольной оплаты
+    // учитель: контакт ученика + добровольная оплата через Monobank (скрин)
+    const rows = [];
+
+    if (MONO_LEAD_URL) {
+      rows.push([Markup.button.callback("💳 Monobank (посилання)", `T_LEAD_MONO_${reqId}`)]);
+      rows.push([Markup.button.callback("📷 Надіслати скрін оплати", `T_LEAD_PROOF_${reqId}`)]);
+    } else {
+      rows.push([Markup.button.callback("💳 Monobank не налаштовано", "IGNORE")]);
+    }
+
+    rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
+
     await ctx.editMessageText(
-      `✅ Прийнято\n\nКонтакт учня: ${studentLink}\n\nХочеш отримати бали та збільшити лічильник учнів?\nОплати лід (добровільно):`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("Оплатити ⭐ Stars", `T_LEAD_PAY_STARS_${reqId}`)],
-        [Markup.button.callback("Оплатити 💳 карткою", `T_LEAD_PAY_CARD_${reqId}`)],
-      ])
+      `✅ Прийнято\n\nКонтакт учня: ${studentLink}\n\n` +
+      `Оплата ЛІДа (добровільно): після підтвердження скріну отримаєш бали та +1 учень.`,
+      Markup.inlineKeyboard(rows)
     );
   });
 
@@ -92,36 +101,7 @@ function registerRequests(bot, deps) {
     await ctx.editMessageText("❌ Відхилено");
   });
 
-  bot.action(/T_LEAD_PAY_STARS_([0-9a-fA-F-]{36})/, async (ctx) => {
-    const reqId = ctx.match[1];
-    await ctx.answerCbQuery();
-
-    const req = await store.getRequestById(reqId);
-    if (!req) return ctx.reply("Заявку не знайдено.");
-    if (String(req.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
-    if (req.lead_paid) return ctx.reply("Цей лід вже оплачено ✅");
-    if (req.status !== "accepted") return ctx.reply("Оплата доступна лише після прийняття заявки.");
-
-    await sendLeadInvoiceStars(ctx, reqId);
-  });
-
-  bot.action(/T_LEAD_PAY_CARD_([0-9a-fA-F-]{36})/, async (ctx) => {
-    const reqId = ctx.match[1];
-    await ctx.answerCbQuery();
-
-    if (!CARD_PROVIDER_TOKEN) {
-      await ctx.reply("Оплата карткою поки не налаштована (CARD_PROVIDER_TOKEN).");
-      return;
-    }
-
-    const req = await store.getRequestById(reqId);
-    if (!req) return ctx.reply("Заявку не знайдено.");
-    if (String(req.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
-    if (req.lead_paid) return ctx.reply("Цей лід вже оплачено ✅");
-    if (req.status !== "accepted") return ctx.reply("Оплата доступна лише після прийняття заявки.");
-
-    await sendLeadInvoiceCard(ctx, reqId, CARD_PROVIDER_TOKEN);
-  });
+  bot.action("IGNORE", async (ctx) => ctx.answerCbQuery());
 }
 
 module.exports = { registerRequests };

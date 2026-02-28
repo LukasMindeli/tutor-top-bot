@@ -9,6 +9,7 @@ const { registerAdmin } = require("./admin");
 const { registerTeacher } = require("./teacher");
 const { registerStudent } = require("./student");
 const { registerRequests } = require("./requests");
+const { registerProofs } = require("./proofs");
 const { registerPayments } = require("./payments");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -75,6 +76,8 @@ bot.action("BACK_MENU", async (ctx) => {
 
 // админ первым
 registerAdmin(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects, PROMO_PACKS });
+
+registerProofs(bot, { store, ui, getSession });
 
 // остальное
 registerTeacher(bot, { store, ui, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getSession, SUBJECT_LABELS, searchSubjects });
