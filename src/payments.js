@@ -1,7 +1,8 @@
-const { subjLabel } = require("./helpers");
+const { subjLabel } = require("./constants");
+const { fmtDate } = require("./helpers");
 
 function registerPayments(bot, deps) {
-  const { db, persist, ui, getSession } = deps;
+  const { store, ui, getSession } = deps;
 
   bot.on("pre_checkout_query", async (ctx) => {
     await ctx.answerPreCheckoutQuery(true);
@@ -11,36 +12,27 @@ function registerPayments(bot, deps) {
     const sp = ctx.message.successful_payment;
     const payload = sp.invoice_payload || "";
     const parts = payload.split("|");
-
     // promo|userId|subject|days|method|timestamp
     if (parts[0] !== "promo") {
       await ctx.reply("Оплату отримано ✅");
       return;
     }
 
-    const userId = String(parts[1]);
+    const teacherId = parts[1];
     const subject = parts[2];
     const days = parseInt(parts[3], 10);
 
-    const user = db.users[userId];
-    if (!user) {
-      await ctx.reply("Оплату отримано ✅");
-      return;
-    }
-
     const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-    user.promos ||= {};
-    user.promos[subject] = { expiresAt, chargeId: sp.telegram_payment_charge_id };
-    persist();
 
-    await ctx.reply(
-      `Оплата успішна ✅\nТОП активний: ${subjLabel(subject)}\nДо: ${new Date(expiresAt).toLocaleString("uk-UA")}`,
-      ui.mainMenu("teacher")
-    );
+    await store.addPromo(teacherId, subject, expiresAt, sp.telegram_payment_charge_id);
 
-    // чистимо pendingPromo
     const s = getSession(ctx.from.id);
     s.pendingPromo = null;
+
+    await ctx.reply(
+      `Оплата успішна ✅\nТОП активний: ${subject}\nДо: ${fmtDate(expiresAt)}`,
+      ui.mainMenu("teacher")
+    );
   });
 }
 
@@ -49,9 +41,9 @@ function sendStarsInvoice(ctx, pendingPromo) {
 
   return ctx.replyWithInvoice({
     title: "ТОП репетитора",
-    description: `ТОП по предмету: ${subjLabel(pendingPromo.subject)} на ${pendingPromo.days} днів`,
+    description: `ТОП по предмету: ${pendingPromo.subject} на ${pendingPromo.days} днів`,
     payload,
-    provider_token: "", // Stars
+    provider_token: "",
     currency: "XTR",
     prices: [{ label: `ТОП ${pendingPromo.days} днів`, amount: pendingPromo.priceStars }],
   });
@@ -62,7 +54,7 @@ function sendCardInvoice(ctx, providerToken, pendingPromo) {
 
   return ctx.replyWithInvoice({
     title: "ТОП репетитора",
-    description: `ТОП по предмету: ${subjLabel(pendingPromo.subject)} на ${pendingPromo.days} днів`,
+    description: `ТОП по предмету: ${pendingPromo.subject} на ${pendingPromo.days} днів`,
     payload,
     provider_token: providerToken,
     currency: "UAH",

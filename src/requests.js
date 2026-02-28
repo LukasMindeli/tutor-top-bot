@@ -1,109 +1,82 @@
-const { makeReqId, canSendRequest, tgUserLink, subjLabel } = require("./helpers");
+const { tgUserLink } = require("./helpers");
 
 function registerRequests(bot, deps) {
-  const { db, persist, ui, getUser, getSession } = deps;
+  const { store, ui, getUserSession, LIMITS } = deps;
 
-  // студент натискає "Надіслати заявку"
+  // студент надсилає заявку
   bot.action(/S_REQ_(\d+)/, async (ctx) => {
-    const s = getSession(ctx.from.id);
-    if (s.mode !== "student") {
-      await ctx.answerCbQuery();
+    const s = getUserSession(ctx.from.id);
+    if (s.mode !== "student") { await ctx.answerCbQuery(); return; }
+
+    await ctx.answerCbQuery();
+
+    const teacherId = String(ctx.match[1]);
+    const subject = s.lastStudentSubject || null;
+
+    const cnt = await store.countStudentRequestsLastHour(ctx.from.id);
+    if (cnt >= LIMITS.REQ_LIMIT_PER_HOUR) {
+      await ctx.reply("Забагато заявок за годину. Спробуй пізніше.");
       return;
     }
 
-    const teacherId = String(ctx.match[1]);
-    const teacher = db.users[teacherId];
-
-    await ctx.answerCbQuery();
-    if (!teacher) return ctx.reply("Вчителя не знайдено.");
-
-    const student = getUser(ctx.from.id);
-
-    if (!canSendRequest(student, deps.LIMITS.REQ_LIMIT_PER_HOUR)) {
-      return ctx.reply("Забагато заявок за годину. Спробуй пізніше.");
+    const reqId = await store.createRequest(teacherId, ctx.from.id, subject);
+    if (!reqId) {
+      await ctx.reply("Помилка. Не вдалося створити заявку.");
+      return;
     }
 
-    const reqId = makeReqId();
-    const subject = s.lastStudentSubject || teacher.teacher.subject;
-
-    db.requests ||= {};
-    db.requests[reqId] = {
-      id: reqId,
-      teacherId,
-      studentId: String(ctx.from.id),
-      subject,
-      status: "pending",
-      createdAt: new Date().toISOString(),
-    };
-    persist();
-
-    // повідомлення вчителю з кнопками
-    const studentName = student.meta?.first_name || "Учень";
-    const studentUsername = student.meta?.username || "";
+    const studentMeta = await store.getUserMeta(ctx.from.id);
+    const studentName = studentMeta?.first_name || "Учень";
+    const studentUsername = studentMeta?.username || null;
 
     try {
       await bot.telegram.sendMessage(
         teacherId,
-        `📩 Нова заявка (${reqId})\nВід: ${studentName}\nПредмет: ${subjLabel(subject)}\n\nПрийняти заявку?`,
+        `📩 Нова заявка\nВід: ${studentName}\nПредмет: ${subject || "—"}\n\nПрийняти заявку?`,
         ui.requestDecisionKeyboard(reqId)
       );
-    } catch (e) {
-      // якщо вчитель ніколи не писав боту — Telegram не дозволить
-    }
+    } catch (e) {}
 
-    await ctx.editMessageText(
-      "Заявку надіслано ✅\n\nЯкщо вчитель уже писав цьому боту — він отримає повідомлення.",
-      ui.backMenuKeyboard()
-    );
+    await ctx.editMessageText("Заявку надіслано ✅", ui.backMenuKeyboard());
   });
 
-  // вчитель приймає
-  bot.action(/T_REQ_ACCEPT_(req_.+)/, async (ctx) => {
+  // учитель прийняв
+  bot.action(/T_REQ_ACCEPT_([0-9a-fA-F-]{36})/, async (ctx) => {
     const reqId = ctx.match[1];
-    const req = db.requests?.[reqId];
-
     await ctx.answerCbQuery();
-    if (!req) return ctx.reply("Заявку не знайдено.");
-    if (String(req.teacherId) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
-    if (req.status !== "pending") return ctx.reply(`Заявка вже оброблена: ${req.status}`);
 
-    req.status = "accepted";
-    req.updatedAt = new Date().toISOString();
-    persist();
+    const req = await store.updateRequestStatus(reqId, ctx.from.id, "accepted");
+    if (!req) return ctx.reply("Не вдалося оновити заявку (можливо не твоя).");
 
-    const teacher = getUser(ctx.from.id);
-    const teacherLink = tgUserLink(ctx.from.id, teacher.meta?.username);
+    const teacherMeta = await store.getUserMeta(ctx.from.id);
+    const teacherLink = tgUserLink(ctx.from.id, teacherMeta?.username);
 
-    // повідомлення учню
     try {
       await bot.telegram.sendMessage(
-        req.studentId,
-        `✅ Вчитель прийняв заявку!\nПредмет: ${subjLabel(req.subject)}\n\nНапиши вчителю: ${teacherLink}`
+        req.student_id,
+        `✅ Вчитель прийняв заявку!\nПредмет: ${req.subject || "—"}\n\nНапиши вчителю: ${teacherLink}`
       );
     } catch (e) {}
 
-    await ctx.editMessageText(`✅ Прийнято\nЗаявка: ${reqId}`);
+    await ctx.editMessageText(`✅ Прийнято\nID: ${reqId}`);
   });
 
-  // вчитель відхиляє
-  bot.action(/T_REQ_DECLINE_(req_.+)/, async (ctx) => {
+  // учитель відхилив
+  bot.action(/T_REQ_DECLINE_([0-9a-fA-F-]{36})/, async (ctx) => {
     const reqId = ctx.match[1];
-    const req = db.requests?.[reqId];
-
     await ctx.answerCbQuery();
-    if (!req) return ctx.reply("Заявку не знайдено.");
-    if (String(req.teacherId) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
-    if (req.status !== "pending") return ctx.reply(`Заявка вже оброблена: ${req.status}`);
 
-    req.status = "declined";
-    req.updatedAt = new Date().toISOString();
-    persist();
+    const req = await store.updateRequestStatus(reqId, ctx.from.id, "declined");
+    if (!req) return ctx.reply("Не вдалося оновити заявку (можливо не твоя).");
 
     try {
-      await bot.telegram.sendMessage(req.studentId, `❌ Вчитель відхилив заявку.\nПредмет: ${subjLabel(req.subject)}`);
+      await bot.telegram.sendMessage(
+        req.student_id,
+        `❌ Вчитель відхилив заявку.\nПредмет: ${req.subject || "—"}`
+      );
     } catch (e) {}
 
-    await ctx.editMessageText(`❌ Відхилено\nЗаявка: ${reqId}`);
+    await ctx.editMessageText(`❌ Відхилено\nID: ${reqId}`);
   });
 }
 

@@ -1,43 +1,5 @@
-const { SUBJECTS } = require("./constants");
-
-function nowMs() {
-  return Date.now();
-}
-
 function fmtDate(iso) {
-  try {
-    return new Date(iso).toLocaleString("uk-UA");
-  } catch {
-    return iso;
-  }
-}
-
-function subjLabel(key) {
-  return SUBJECTS.find((s) => s.key === key)?.label || key || "—";
-}
-
-function isPromoActive(user, subjectKey) {
-  const p = user?.promos?.[subjectKey];
-  if (!p?.expiresAt) return false;
-  return new Date(p.expiresAt).getTime() > nowMs();
-}
-
-function ensureUser(db, userIdRaw) {
-  const userId = String(userIdRaw);
-
-  db.users[userId] ||= {
-    meta: { first_name: "", username: "" },
-    lastMode: null,
-    teacher: { subject: null, price: null, bio: null, isActive: false, photoFileId: null },
-    student: { reqLog: [] },
-    promos: {},
-  };
-
-  // миграция старых данных
-  db.users[userId].teacher ||= { subject: null, price: null, bio: null, isActive: false, photoFileId: null };
-  if (db.users[userId].teacher.photoFileId === undefined) db.users[userId].teacher.photoFileId = null;
-
-  return db.users[userId];
+  try { return new Date(iso).toLocaleString("uk-UA"); } catch { return iso; }
 }
 
 function parseNumber(text) {
@@ -46,67 +8,10 @@ function parseNumber(text) {
   return Number.isFinite(num) ? num : null;
 }
 
-function makeReqId() {
-  return `req_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-function canSendRequest(user, limitPerHour) {
-  user.student ||= {};
-  user.student.reqLog ||= [];
-
-  const hourAgo = nowMs() - 60 * 60 * 1000;
-  user.student.reqLog = user.student.reqLog.filter((t) => t > hourAgo);
-
-  if (user.student.reqLog.length >= limitPerHour) return false;
-
-  user.student.reqLog.push(nowMs());
-  return true;
-}
-
-function teacherCardUA(user) {
-  const t = user.teacher || {};
-  const subject = subjLabel(t.subject);
-  const price = t.price ? `${t.price} грн / 60 хв` : "—";
-  const bio = t.bio ? t.bio : "—";
-  const status = t.isActive ? "✅ Активна (у пошуку)" : "⏸ Пауза (прихована)";
-  const photo = t.photoFileId ? "✅ Є" : "—";
-
-  const promoLine =
-    t.subject && isPromoActive(user, t.subject)
-      ? `⭐ ТОП активний до ${fmtDate(user.promos[t.subject].expiresAt)}`
-      : "⭐ ТОП: —";
-
-  return (
-    `🧑‍🏫 Моя анкета\n\n` +
-    `Статус: ${status}\n` +
-    `Предмет: ${subject}\n` +
-    `Ціна: ${price}\n` +
-    `Фото: ${photo}\n` +
-    `${promoLine}\n\n` +
-    `Опис:\n${bio}`
-  );
-}
-
-function teacherCardForStudentUA(teacherUser) {
-  const name = teacherUser.meta?.first_name || "Вчитель";
-  const subjKey = teacherUser.teacher?.subject;
-  const subject = subjLabel(subjKey);
-  const price = teacherUser.teacher?.price ? `${teacherUser.teacher.price} грн / 60 хв` : "—";
-  const bio = teacherUser.teacher?.bio ? teacherUser.teacher.bio : "—";
-  const photo = teacherUser.teacher?.photoFileId ? "✅ Є" : "—";
-
-  const isTop = subjKey ? isPromoActive(teacherUser, subjKey) : false;
-  const until = isTop ? teacherUser.promos?.[subjKey]?.expiresAt : null;
-  const topLine = isTop && until ? `⭐ ТОП активний до ${fmtDate(until)}\n` : (isTop ? "⭐ ТОП\n" : "");
-
-  return (
-    `${topLine}` +
-    `👤 ${name}\n` +
-    `Предмет: ${subject}\n` +
-    `Ціна: ${price}\n` +
-    `Фото: ${photo}\n\n` +
-    `Опис:\n${bio}`
-  );
+function truncate(s, n = 450) {
+  s = String(s || "").trim();
+  if (s.length <= n) return s;
+  return s.slice(0, n - 1) + "…";
 }
 
 function tgUserLink(userId, username) {
@@ -114,16 +19,4 @@ function tgUserLink(userId, username) {
   return `tg://user?id=${userId}`;
 }
 
-module.exports = {
-  nowMs,
-  fmtDate,
-  subjLabel,
-  isPromoActive,
-  ensureUser,
-  parseNumber,
-  makeReqId,
-  canSendRequest,
-  teacherCardUA,
-  teacherCardForStudentUA,
-  tgUserLink,
-};
+module.exports = { fmtDate, parseNumber, truncate, tgUserLink };

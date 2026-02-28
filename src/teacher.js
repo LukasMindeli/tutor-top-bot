@@ -1,5 +1,5 @@
 const { Markup } = require("telegraf");
-const { parseNumber, isPromoActive, fmtDate, teacherCardUA, subjLabel } = require("./helpers");
+const { parseNumber, fmtDate } = require("./helpers");
 const { sendStarsInvoice, sendCardInvoice } = require("./payments");
 
 function buildMatchesKeyboard(prefixPick, moreCb, page, hasMore) {
@@ -10,10 +10,7 @@ function buildMatchesKeyboard(prefixPick, moreCb, page, hasMore) {
 }
 
 function registerTeacher(bot, deps) {
-  const {
-    db, persist, ui, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN,
-    getUser, getSession, SUBJECT_LABELS, searchSubjects
-  } = deps;
+  const { store, ui, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getSession, SUBJECT_LABELS, searchSubjects } = deps;
 
   function renderSubjectMatchesText(query, offset, total) {
     return (
@@ -25,13 +22,13 @@ function registerTeacher(bot, deps) {
     );
   }
 
-  // ===== Фото анкети =====
+  // Фото меню
   bot.action("T_PHOTO_MENU", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
-    const user = getUser(ctx.from.id);
-    const has = !!user.teacher.photoFileId;
+    const prof = await store.getTeacherProfile(ctx.from.id);
+    const has = !!prof?.photo_file_id;
 
     await ctx.answerCbQuery();
     await ctx.editMessageText(
@@ -48,7 +45,6 @@ function registerTeacher(bot, deps) {
   bot.action("T_PHOTO_ADD", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
-
     s.step = "T_WAIT_PHOTO";
 
     await ctx.answerCbQuery();
@@ -59,9 +55,7 @@ function registerTeacher(bot, deps) {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
-    const user = getUser(ctx.from.id);
-    user.teacher.photoFileId = null;
-    persist();
+    await store.updateTeacherProfile(ctx.from.id, { photo_file_id: null });
 
     await ctx.answerCbQuery();
     await ctx.editMessageText("Фото видалено ✅", ui.mainMenu("teacher"));
@@ -71,14 +65,11 @@ function registerTeacher(bot, deps) {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
-    const user = getUser(ctx.from.id);
+    const prof = await store.getTeacherProfile(ctx.from.id);
     await ctx.answerCbQuery();
 
-    if (!user.teacher.photoFileId) {
-      await ctx.reply("Фото ще не додано.");
-      return;
-    }
-    await ctx.replyWithPhoto(user.teacher.photoFileId, { caption: "Фото з анкети" });
+    if (!prof?.photo_file_id) return ctx.reply("Фото ще не додано.");
+    await ctx.replyWithPhoto(prof.photo_file_id, { caption: "Фото з анкети" });
   });
 
   bot.on("photo", async (ctx) => {
@@ -86,22 +77,17 @@ function registerTeacher(bot, deps) {
     if (s.mode !== "teacher") return;
     if (s.step !== "T_WAIT_PHOTO") return;
 
-    const user = getUser(ctx.from.id);
     const arr = ctx.message.photo || [];
     const best = arr[arr.length - 1];
-    if (!best?.file_id) {
-      await ctx.reply("Не зміг прочитати фото. Спробуй ще раз.");
-      return;
-    }
+    if (!best?.file_id) return ctx.reply("Не зміг прочитати фото. Спробуй ще раз.");
 
-    user.teacher.photoFileId = best.file_id;
-    persist();
+    await store.updateTeacherProfile(ctx.from.id, { photo_file_id: best.file_id });
 
     s.step = null;
     await ctx.reply("Фото збережено ✅", ui.mainMenu("teacher"));
   });
 
-  // ===== Анкета: предмет через текст =====
+  // анкета — предмет
   bot.action("T_PROFILE", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
@@ -120,11 +106,7 @@ function registerTeacher(bot, deps) {
 
     const all = searchSubjects(SUBJECT_LABELS, s.subjQuery || "");
     await ctx.answerCbQuery();
-
-    if (!all.length) {
-      await ctx.reply("Немає результатів. Введи новий запит текстом.");
-      return;
-    }
+    if (!all.length) return ctx.reply("Немає результатів. Введи новий запит текстом.");
 
     s.subjOffset = (s.subjOffset || 0) + 10;
     if (s.subjOffset >= all.length) s.subjOffset = 0;
@@ -144,17 +126,11 @@ function registerTeacher(bot, deps) {
 
     const idx = parseInt(ctx.match[1], 10);
     const label = SUBJECT_LABELS[idx];
-    const user = getUser(ctx.from.id);
 
     await ctx.answerCbQuery();
+    if (!label) return ctx.reply("Помилка вибору предмета. Спробуй пошук ще раз.");
 
-    if (!label) {
-      await ctx.reply("Помилка вибору предмета. Спробуй пошук ще раз.");
-      return;
-    }
-
-    user.teacher.subject = label;
-    persist();
+    await store.updateTeacherProfile(ctx.from.id, { subject: label });
 
     s.step = "T_WAIT_PRICE";
     await ctx.editMessageText(
@@ -167,29 +143,49 @@ function registerTeacher(bot, deps) {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
-    const user = getUser(ctx.from.id);
+    const meta = await store.getUserMeta(ctx.from.id);
+    const prof = await store.getTeacherProfile(ctx.from.id);
+
+    const photo = prof?.photo_file_id ? "✅ Є" : "—";
+    const status = prof?.is_active ? "✅ Активна (у пошуку)" : "⏸ Пауза (прихована)";
+    const price = prof?.price ? `${prof.price} грн / 60 хв` : "—";
+    const bio = prof?.bio ? prof.bio : "—";
+    const subject = prof?.subject || "—";
+
+    const promoUntil = prof?.subject ? await store.getActivePromoForTeacher(ctx.from.id, prof.subject) : null;
+    const promoLine = promoUntil ? `⭐ ТОП активний до ${fmtDate(promoUntil)}` : "⭐ ТОП: —";
+
     await ctx.answerCbQuery();
-    await ctx.editMessageText(teacherCardUA(user), ui.backMenuKeyboard());
+    await ctx.editMessageText(
+      `🧑‍🏫 Моя анкета\n\n` +
+      `Ім'я: ${meta?.first_name || "—"}\n` +
+      `Статус: ${status}\n` +
+      `Предмет: ${subject}\n` +
+      `Ціна: ${price}\n` +
+      `Фото: ${photo}\n` +
+      `${promoLine}\n\n` +
+      `Опис:\n${bio}`,
+      ui.backMenuKeyboard()
+    );
   });
 
   bot.action("T_TOGGLE_ACTIVE", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
-    const user = getUser(ctx.from.id);
-
-    if (!user.teacher.subject || !user.teacher.price || !user.teacher.bio) {
+    const prof = await store.getTeacherProfile(ctx.from.id);
+    if (!prof?.subject || !prof?.price || !prof?.bio) {
       await ctx.answerCbQuery();
       await ctx.reply("Спочатку заповни анкету (предмет, ціна, опис).");
       return;
     }
 
-    user.teacher.isActive = !user.teacher.isActive;
-    persist();
+    const nextActive = !prof.is_active;
+    await store.updateTeacherProfile(ctx.from.id, { is_active: nextActive });
 
     await ctx.answerCbQuery();
     await ctx.editMessageText(
-      `Готово ✅\nАнкета: ${user.teacher.isActive ? "✅ Активна" : "⏸ Пауза"}\n\nГоловне меню:`,
+      `Готово ✅\nАнкета: ${nextActive ? "✅ Активна" : "⏸ Пауза"}\n\nГоловне меню:`,
       ui.mainMenu("teacher")
     );
   });
@@ -209,16 +205,9 @@ function registerTeacher(bot, deps) {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
-    const user = getUser(ctx.from.id);
-
-    user.teacher = { subject: null, price: null, bio: null, isActive: false, photoFileId: null };
-    user.promos = {};
-    for (const [id, r] of Object.entries(db.requests || {})) {
-      if (String(r.teacherId) === String(ctx.from.id)) delete db.requests[id];
-    }
+    await store.deleteTeacherProfile(ctx.from.id);
 
     s.step = null;
-    persist();
 
     await ctx.answerCbQuery();
     await ctx.editMessageText("Анкету видалено ✅\n\nГоловне меню:", ui.mainMenu("teacher"));
@@ -229,21 +218,16 @@ function registerTeacher(bot, deps) {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
-    const user = getUser(ctx.from.id);
+    const prof = await store.getTeacherProfile(ctx.from.id);
     await ctx.answerCbQuery();
 
-    if (!user.teacher.subject) {
-      await ctx.editMessageText("Щоб купити ТОП, спочатку обери предмет в анкеті.", ui.backMenuKeyboard());
-      return;
-    }
+    if (!prof?.subject) return ctx.editMessageText("Щоб купити ТОП, спочатку обери предмет в анкеті.", ui.backMenuKeyboard());
 
-    const subject = user.teacher.subject;
-    const line = isPromoActive(user, subject)
-      ? `Зараз ТОП активний до: ${fmtDate(user.promos[subject].expiresAt)}`
-      : "ТОП зараз не активний";
+    const promoUntil = await store.getActivePromoForTeacher(ctx.from.id, prof.subject);
+    const line = promoUntil ? `Зараз ТОП активний до: ${fmtDate(promoUntil)}` : "ТОП зараз не активний";
 
     await ctx.editMessageText(
-      `ТОП (як у Buki)\n\nПредмет: ${subject}\n${line}\n\nОбери термін:`,
+      `ТОП (як у Buki)\n\nПредмет: ${prof.subject}\n${line}\n\nОбери термін:`,
       ui.promoPacksKeyboard(PROMO_PACKS)
     );
   });
@@ -252,19 +236,14 @@ function registerTeacher(bot, deps) {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
+    const prof = await store.getTeacherProfile(ctx.from.id);
     const days = parseInt(ctx.match[1], 10);
     const pack = PROMO_PACKS.find((p) => p.days === days);
-    const user = getUser(ctx.from.id);
 
     await ctx.answerCbQuery();
-    if (!pack || !user.teacher.subject) return ctx.reply("Помилка вибору пакета.");
+    if (!pack || !prof?.subject) return ctx.reply("Помилка вибору пакета.");
 
-    s.pendingPromo = {
-      subject: user.teacher.subject,
-      days: pack.days,
-      priceUah: pack.priceUah,
-      priceStars: pack.priceStars,
-    };
+    s.pendingPromo = { subject: prof.subject, days: pack.days, priceUah: pack.priceUah, priceStars: pack.priceStars };
 
     await ctx.editMessageText(
       `Покупка ТОП\n\nПредмет: ${s.pendingPromo.subject}\nТермін: ${pack.days} днів\nЦіна: ${pack.priceUah} грн або ${pack.priceStars} ⭐\n\nОбери оплату:`,
@@ -278,7 +257,6 @@ function registerTeacher(bot, deps) {
 
     await ctx.answerCbQuery();
     if (!s.pendingPromo) return ctx.reply("Спочатку обери термін ТОП.");
-
     await sendStarsInvoice(ctx, s.pendingPromo);
   });
 
@@ -289,43 +267,30 @@ function registerTeacher(bot, deps) {
     await ctx.answerCbQuery();
     if (!s.pendingPromo) return ctx.reply("Спочатку обери термін ТОП.");
 
-    if (!CARD_PROVIDER_TOKEN) {
-      await ctx.reply("Оплата карткою поки не налаштована (CARD_PROVIDER_TOKEN).");
-      return;
-    }
-
+    if (!CARD_PROVIDER_TOKEN) return ctx.reply("Оплата карткою поки не налаштована (CARD_PROVIDER_TOKEN).");
     await sendCardInvoice(ctx, CARD_PROVIDER_TOKEN, s.pendingPromo);
   });
 
-  // ===== КЛЮЧОВЕ: text middleware з next() =====
+  // text middleware (teacher)
   bot.on("text", async (ctx, next) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") return next();
 
-    // якщо чекаємо фото — не пропускаємо в інші хендлери
     if (s.step === "T_WAIT_PHOTO") {
       await ctx.reply("Зараз очікую фото 📷. Надішли фото повідомленням.");
       return;
     }
 
-    const user = getUser(ctx.from.id);
     const text = (ctx.message.text || "").trim();
 
-    // 1) пошук предмета
     if (s.step === "T_SUBJECT_QUERY") {
-      if (text.length < 2) {
-        await ctx.reply("Напиши хоча б 2 символи для пошуку.");
-        return;
-      }
+      if (text.length < 2) return ctx.reply("Напиши хоча б 2 символи для пошуку.");
 
       s.subjQuery = text;
       s.subjOffset = 0;
 
       const all = searchSubjects(SUBJECT_LABELS, s.subjQuery);
-      if (!all.length) {
-        await ctx.reply("Нічого не знайшов. Спробуй інший запит.");
-        return;
-      }
+      if (!all.length) return ctx.reply("Нічого не знайшов. Спробуй інший запит.");
 
       const page = all.slice(0, 10);
       const hasMore = all.length > 10;
@@ -337,37 +302,29 @@ function registerTeacher(bot, deps) {
       return;
     }
 
-    // 2) ціна
     if (s.step === "T_WAIT_PRICE") {
       const num = parseNumber(text);
-      if (num === null) { await ctx.reply("Не зрозумів ціну. Напиши число (наприклад 400)."); return; }
-      if (num < LIMITS.PRICE_MIN || num > LIMITS.PRICE_MAX) {
-        await ctx.reply(`Ціна має бути ${LIMITS.PRICE_MIN}–${LIMITS.PRICE_MAX} грн. Напиши ще раз.`);
-        return;
-      }
+      if (num === null) return ctx.reply("Не зрозумів ціну. Напиши число (наприклад 400).");
+      if (num < LIMITS.PRICE_MIN || num > LIMITS.PRICE_MAX) return ctx.reply(`Ціна має бути ${LIMITS.PRICE_MIN}–${LIMITS.PRICE_MAX} грн. Напиши ще раз.`);
 
-      user.teacher.price = num;
-      persist();
+      await store.updateTeacherProfile(ctx.from.id, { price: num });
 
       s.step = "T_WAIT_BIO";
       await ctx.reply(`Ціну збережено ✅ ${num} грн / 60 хв\n\nТепер напиши короткий опис (1–3 речення).`);
       return;
     }
 
-    // 3) опис
     if (s.step === "T_WAIT_BIO") {
-      if (text.length < LIMITS.BIO_MIN) { await ctx.reply(`Занадто коротко. Мінімум ${LIMITS.BIO_MIN} символів.`); return; }
-      if (text.length > LIMITS.BIO_MAX) { await ctx.reply(`Занадто довго. Максимум ${LIMITS.BIO_MAX} символів.`); return; }
+      if (text.length < LIMITS.BIO_MIN) return ctx.reply(`Занадто коротко. Мінімум ${LIMITS.BIO_MIN} символів.`);
+      if (text.length > LIMITS.BIO_MAX) return ctx.reply(`Занадто довго. Максимум ${LIMITS.BIO_MAX} символів.`);
 
-      user.teacher.bio = text;
-      persist();
+      await store.updateTeacherProfile(ctx.from.id, { bio: text });
 
       s.step = null;
       await ctx.reply("Опис збережено ✅\n\nНатисни «Активна/Пауза», щоб увімкнути анкету в пошуку.", ui.mainMenu("teacher"));
       return;
     }
 
-    // якщо цей текст не про вчителя — пропускаємо
     return next();
   });
 }
