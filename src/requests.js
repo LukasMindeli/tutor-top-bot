@@ -61,14 +61,14 @@ function registerRequests(bot, deps) {
       );
     } catch (e) {}
 
-    // учитель: контакт ученика + добровольная оплата через Monobank (скрин)
+    // учитель: контакт ученика + Monobank URL + скрин
     const rows = [];
 
     if (MONO_LEAD_URL) {
-      rows.push([Markup.button.callback("💳 Monobank (посилання)", `T_LEAD_MONO_${reqId}`)]);
+      rows.push([Markup.button.url("💳 Оплатити Monobank (100 грн)", MONO_LEAD_URL)]);
       rows.push([Markup.button.callback("📷 Надіслати скрін оплати", `T_LEAD_PROOF_${reqId}`)]);
     } else {
-      rows.push([Markup.button.callback("💳 Monobank не налаштовано", "IGNORE")]);
+      rows.push([Markup.button.callback("⚠️ MONO_LEAD_URL не налаштовано", "IGNORE")]);
     }
 
     rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);

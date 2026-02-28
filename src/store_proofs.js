@@ -1,7 +1,5 @@
 const { supabase } = require("./supabase");
 
-function isoNow() { return new Date().toISOString(); }
-
 async function createProof(payload) {
   const { data, error } = await supabase
     .from("payment_proofs")
@@ -9,11 +7,10 @@ async function createProof(payload) {
     .select("id")
     .single();
 
-  if (error) {
-    console.error("createProof error:", error.message);
-    return null;
-  }
-  return data?.id || null;
+  return {
+    id: data?.id || null,
+    error: error?.message || null,
+  };
 }
 
 async function getProofById(id) {
@@ -36,7 +33,7 @@ async function setProofStatus(id, status, reviewerId, note) {
     .update({
       status,
       reviewer_id: reviewerId ? String(reviewerId) : null,
-      reviewed_at: isoNow(),
+      reviewed_at: new Date().toISOString(),
       note: note || null,
     })
     .eq("id", id)
