@@ -21,7 +21,8 @@ function teacherTextUA(t) {
     `👤 ${name}\n` +
     `Предмет: ${t.subject}\n` +
     `Ціна: ${price}\n` +
-    `Фото: \nБали: \n\n` +
+    `Фото: ${photo}\n` +
+    `Бали: ${points}\n\n` +
     `Опис:\n${bio}`
   );
 }
@@ -87,6 +88,7 @@ function registerStudent(bot, deps) {
 
     if (!pageItems.length) {
       await ctx.reply("Більше репетиторів немає.", Markup.inlineKeyboard([
+        [Markup.button.callback("🔄 Оновити список", "S_REFRESH")],
         [Markup.button.callback("🔎 Змінити предмет", "S_SEARCH")],
         [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
       ]));
@@ -109,6 +111,7 @@ function registerStudent(bot, deps) {
     const hasMore = s.tutorList.offset < list.length;
     const controls = [];
     if (hasMore) controls.push([Markup.button.callback("Показати ще 7", "S_MORE_7")]);
+    controls.push([Markup.button.callback("🔄 Оновити список", "S_REFRESH")]);
     controls.push([Markup.button.callback("🔎 Змінити предмет", "S_SEARCH")]);
     controls.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
 
@@ -134,6 +137,7 @@ function registerStudent(bot, deps) {
     const list = await store.listTeachersBySubject(label);
     if (!list.length) {
       await ctx.reply("Поки що немає активних анкет по цьому предмету.", Markup.inlineKeyboard([
+        [Markup.button.callback("🔄 Оновити список", "S_REFRESH")],
         [Markup.button.callback("🔎 Змінити предмет", "S_SEARCH")],
         [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
       ]));
@@ -153,6 +157,33 @@ function registerStudent(bot, deps) {
     const subject = s.tutorList?.subject || s.lastStudentSubject;
     if (!subject) return ctx.reply("Спочатку обери предмет.", ui.backMenuKeyboard());
 
+    await sendTutorsPage(ctx, subject);
+  });
+
+  // 🔄 обновить список (перетянуть из Supabase заново)
+  bot.action("S_REFRESH", async (ctx) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "student") { await ctx.answerCbQuery(); return; }
+    await ctx.answerCbQuery();
+
+    const subject = s.tutorList?.subject || s.lastStudentSubject;
+    if (!subject) {
+      await ctx.reply("Спочатку обери предмет.", Markup.inlineKeyboard([
+        [Markup.button.callback("🔎 Змінити предмет", "S_SEARCH")],
+        [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
+      ]));
+      return;
+    }
+
+    s.tutorList = null;
+    const list = await store.listTeachersBySubject(subject);
+    if (!list.length) {
+      await ctx.reply("Поки що немає активних анкет по цьому предмету.");
+      return;
+    }
+
+    await ctx.reply("🔄 Оновлено. Показую перших 7 знову:");
+    s.tutorList = { subject, items: list, offset: 0 };
     await sendTutorsPage(ctx, subject);
   });
 
