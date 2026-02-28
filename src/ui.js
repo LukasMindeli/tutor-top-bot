@@ -16,6 +16,7 @@ function mainMenu(mode) {
     return Markup.inlineKeyboard([
       [Markup.button.callback("Заповнити/змінити анкету", "T_PROFILE")],
       [Markup.button.callback("Моя анкета", "T_SHOW_PROFILE")],
+      [Markup.button.callback("Фото анкети", "T_PHOTO_MENU")],
       [Markup.button.callback("Активна/Пауза", "T_TOGGLE_ACTIVE")],
       [Markup.button.callback("Видалити анкету", "T_DELETE_PROFILE")],
       [Markup.button.callback("Просування (ТОП)", "T_PROMO")],

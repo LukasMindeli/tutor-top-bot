@@ -28,10 +28,14 @@ function ensureUser(db, userIdRaw) {
   db.users[userId] ||= {
     meta: { first_name: "", username: "" },
     lastMode: null,
-    teacher: { subject: null, price: null, bio: null, isActive: false },
+    teacher: { subject: null, price: null, bio: null, isActive: false, photoFileId: null },
     student: { reqLog: [] },
-    promos: {},     // subjectKey -> { expiresAt, chargeId }
+    promos: {},
   };
+
+  // миграция старых данных
+  db.users[userId].teacher ||= { subject: null, price: null, bio: null, isActive: false, photoFileId: null };
+  if (db.users[userId].teacher.photoFileId === undefined) db.users[userId].teacher.photoFileId = null;
 
   return db.users[userId];
 }
@@ -65,6 +69,7 @@ function teacherCardUA(user) {
   const price = t.price ? `${t.price} грн / 60 хв` : "—";
   const bio = t.bio ? t.bio : "—";
   const status = t.isActive ? "✅ Активна (у пошуку)" : "⏸ Пауза (прихована)";
+  const photo = t.photoFileId ? "✅ Є" : "—";
 
   const promoLine =
     t.subject && isPromoActive(user, t.subject)
@@ -76,6 +81,7 @@ function teacherCardUA(user) {
     `Статус: ${status}\n` +
     `Предмет: ${subject}\n` +
     `Ціна: ${price}\n` +
+    `Фото: ${photo}\n` +
     `${promoLine}\n\n` +
     `Опис:\n${bio}`
   );
@@ -87,6 +93,7 @@ function teacherCardForStudentUA(teacherUser) {
   const subject = subjLabel(subjKey);
   const price = teacherUser.teacher?.price ? `${teacherUser.teacher.price} грн / 60 хв` : "—";
   const bio = teacherUser.teacher?.bio ? teacherUser.teacher.bio : "—";
+  const photo = teacherUser.teacher?.photoFileId ? "✅ Є" : "—";
 
   const isTop = subjKey ? isPromoActive(teacherUser, subjKey) : false;
   const until = isTop ? teacherUser.promos?.[subjKey]?.expiresAt : null;
@@ -96,7 +103,8 @@ function teacherCardForStudentUA(teacherUser) {
     `${topLine}` +
     `👤 ${name}\n` +
     `Предмет: ${subject}\n` +
-    `Ціна: ${price}\n\n` +
+    `Ціна: ${price}\n` +
+    `Фото: ${photo}\n\n` +
     `Опис:\n${bio}`
   );
 }

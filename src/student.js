@@ -163,13 +163,32 @@ function registerStudent(bot, deps) {
 
     const text = teacherCardForStudentUA(teacher);
 
-    await ctx.editMessageText(
-      text,
-      Markup.inlineKeyboard([
-        [Markup.button.callback("Надіслати заявку", `S_REQ_${teacherId}`)],
-        [Markup.button.callback("⬅️ Назад до списку", "BACK_MENU")],
-      ])
-    );
+    const rows = [];
+    if (teacher.teacher?.photoFileId) {
+      rows.push([Markup.button.callback("📷 Подивитись фото", `S_PHOTO_${teacherId}`)]);
+    }
+    rows.push([Markup.button.callback("Надіслати заявку", `S_REQ_${teacherId}`)]);
+    rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
+
+    await ctx.editMessageText(text, Markup.inlineKeyboard(rows));
+  });
+
+  bot.action(/S_PHOTO_(\d+)/, async (ctx) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "student") { await ctx.answerCbQuery(); return; }
+
+    const teacherId = String(ctx.match[1]);
+    const teacher = db.users[teacherId];
+
+    await ctx.answerCbQuery();
+
+    if (!teacher || !teacher.teacher?.photoFileId) {
+      await ctx.reply("Фото недоступне.");
+      return;
+    }
+
+    const name = teacher.meta?.first_name || "Вчитель";
+    await ctx.replyWithPhoto(teacher.teacher.photoFileId, { caption: `Фото репетитора: ${name}` });
   });
 }
 

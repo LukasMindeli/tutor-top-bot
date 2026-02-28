@@ -20,7 +20,88 @@ function registerTeacher(bot, deps) {
       `Обери зі списку:`;
   }
 
-  // старт анкети — запитуємо текстом
+  // ===== Фото меню =====
+  bot.action("T_PHOTO_MENU", async (ctx) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
+
+    const user = getUser(ctx.from.id);
+    const has = !!user.teacher.photoFileId;
+
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      `Фото анкети\n\nСтатус: ${has ? "✅ Є фото" : "— Немає фото"}\n\nЩо робимо?`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback(has ? "🔄 Замінити фото" : "➕ Додати фото", "T_PHOTO_ADD")],
+        ...(has ? [[Markup.button.callback("👁️ Подивитись фото", "T_PHOTO_SHOW")]] : []),
+        ...(has ? [[Markup.button.callback("🗑️ Видалити фото", "T_PHOTO_DELETE")]] : []),
+        [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
+      ])
+    );
+  });
+
+  bot.action("T_PHOTO_ADD", async (ctx) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
+
+    s.step = "T_WAIT_PHOTO";
+
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      "Надішли одне фото сюди в чат (як звичайне фото в Telegram).",
+      ui.backMenuKeyboard()
+    );
+  });
+
+  bot.action("T_PHOTO_DELETE", async (ctx) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
+
+    const user = getUser(ctx.from.id);
+    user.teacher.photoFileId = null;
+    persist();
+
+    await ctx.answerCbQuery();
+    await ctx.editMessageText("Фото видалено ✅", ui.mainMenu("teacher"));
+  });
+
+  bot.action("T_PHOTO_SHOW", async (ctx) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
+
+    const user = getUser(ctx.from.id);
+    await ctx.answerCbQuery();
+
+    if (!user.teacher.photoFileId) {
+      await ctx.reply("Фото ще не додано.");
+      return;
+    }
+
+    await ctx.replyWithPhoto(user.teacher.photoFileId, { caption: "Фото з анкети" });
+  });
+
+  // Приём фото
+  bot.on("photo", async (ctx) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "teacher") return;
+    if (s.step !== "T_WAIT_PHOTO") return;
+
+    const user = getUser(ctx.from.id);
+    const arr = ctx.message.photo || [];
+    const best = arr[arr.length - 1];
+    if (!best?.file_id) {
+      await ctx.reply("Не зміг прочитати фото. Спробуй ще раз.");
+      return;
+    }
+
+    user.teacher.photoFileId = best.file_id;
+    persist();
+
+    s.step = null;
+    await ctx.reply("Фото збережено ✅", ui.mainMenu("teacher"));
+  });
+
+  // ===== анкета — предмет через текст =====
   bot.action("T_PROFILE", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
@@ -43,6 +124,9 @@ function registerTeacher(bot, deps) {
 
     const user = getUser(ctx.from.id);
     const text = (ctx.message.text || "").trim();
+
+    // якщо чекаємо фото — текст ігноруємо
+    if (s.step === "T_WAIT_PHOTO") return;
 
     // 1) пошук предмета
     if (s.step === "T_SUBJECT_QUERY") {
@@ -189,7 +273,7 @@ function registerTeacher(bot, deps) {
 
     await ctx.answerCbQuery();
     await ctx.editMessageText(
-      "⚠️ Видалити анкету?\n\nБуде видалено:\n- предмет, ціна, опис\n- статус активності\n- усі ТОП-статуси\n\nДію не можна скасувати.",
+      "⚠️ Видалити анкету?\n\nБуде видалено:\n- предмет, ціна, опис\n- фото\n- статус активності\n- усі ТОП-статуси\n\nДію не можна скасувати.",
       ui.confirmDeleteKeyboard()
     );
   });
@@ -200,7 +284,7 @@ function registerTeacher(bot, deps) {
 
     const user = getUser(ctx.from.id);
 
-    user.teacher = { subject: null, price: null, bio: null, isActive: false };
+    user.teacher = { subject: null, price: null, bio: null, isActive: false, photoFileId: null };
     user.promos = {};
     for (const [id, r] of Object.entries(db.requests || {})) {
       if (String(r.teacherId) === String(ctx.from.id)) delete db.requests[id];
