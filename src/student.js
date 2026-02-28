@@ -1,11 +1,39 @@
 const { Markup } = require("telegraf");
-const { teacherCardForStudentUA, isPromoActive } = require("./helpers");
+const { isPromoActive, fmtDate } = require("./helpers");
 
 function buildMatchesKeyboard(prefixPick, moreCb, page, hasMore) {
   const rows = page.map((m) => [Markup.button.callback(m.label, `${prefixPick}_${m.idx}`)]);
   if (hasMore) rows.push([Markup.button.callback("Показати ще", moreCb)]);
   rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
   return Markup.inlineKeyboard(rows);
+}
+
+function truncateBio(bio, maxLen = 450) {
+  const s = String(bio || "").trim();
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen - 1) + "…";
+}
+
+function teacherCardForStudentUA(teacherUser) {
+  const name = teacherUser.meta?.first_name || "Вчитель";
+  const subj = teacherUser.teacher?.subject || "—";
+  const price = teacherUser.teacher?.price ? `${teacherUser.teacher.price} грн / 60 хв` : "—";
+  const bio = truncateBio(teacherUser.teacher?.bio || "—");
+
+  const photo = teacherUser.teacher?.photoFileId ? "✅ Є" : "—";
+
+  const isTop = subj ? isPromoActive(teacherUser, subj) : false;
+  const until = isTop ? teacherUser.promos?.[subj]?.expiresAt : null;
+  const topLine = isTop && until ? `⭐ ТОП активний до ${fmtDate(until)}\n` : (isTop ? "⭐ ТОП\n" : "");
+
+  return (
+    `${topLine}` +
+    `👤 ${name}\n` +
+    `Предмет: ${subj}\n` +
+    `Ціна: ${price}\n` +
+    `Фото: ${photo}\n\n` +
+    `Опис:\n${bio}`
+  );
 }
 
 function registerStudent(bot, deps) {
@@ -60,20 +88,84 @@ function registerStudent(bot, deps) {
     );
   });
 
-  function listTeachersBySubject(subjectLabel) {
+  function buildSortedTeacherIds(subjectLabel) {
     const all = Object.entries(db.users).map(([id, u]) => ({ id, u }));
 
-    const teachers = all
+    // базовый фильтр: активные анкеты + совпадение предмета + заполнено
+    const candidates = all
       .filter(({ u }) => u.teacher?.isActive)
       .filter(({ u }) => u.teacher?.subject === subjectLabel)
       .filter(({ u }) => u.teacher?.price && u.teacher?.bio);
 
-    const top = teachers.filter(({ u }) => isPromoActive(u, subjectLabel));
-    const regular = teachers.filter(({ u }) => !isPromoActive(u, subjectLabel));
+    const items = candidates.map(({ id, u }) => {
+      const isTop = isPromoActive(u, subjectLabel);
+      const points = Number.isFinite(u.teacher?.points) ? u.teacher.points : 0; // на будущее
+      const name = (u.meta?.first_name || "").toLowerCase();
+      return { id, u, isTop, points, name };
+    });
 
-    return { top, regular };
+    // сортировка: ТОП всегда выше, потом points (пока 0), потом по имени (стабильно)
+    items.sort((a, b) =>
+      (b.isTop - a.isTop) ||
+      (b.points - a.points) ||
+      a.name.localeCompare(b.name, "uk")
+    );
+
+    return items;
   }
 
+  async function sendTutorsPage(ctx, subjectLabel) {
+    const s = getSession(ctx.from.id);
+
+    const list = s.tutorList?.subject === subjectLabel
+      ? s.tutorList.items
+      : buildSortedTeacherIds(subjectLabel);
+
+    s.tutorList = s.tutorList?.subject === subjectLabel
+      ? s.tutorList
+      : { subject: subjectLabel, items: list, offset: 0 };
+
+    const offset = s.tutorList.offset || 0;
+    const pageItems = list.slice(offset, offset + 7);
+
+    if (!pageItems.length) {
+      await ctx.reply("Більше репетиторів немає.", Markup.inlineKeyboard([
+        [Markup.button.callback("🔎 Змінити предмет", "S_SEARCH")],
+        [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
+      ]));
+      return;
+    }
+
+    // шлём 7 карточек в чат
+    for (const it of pageItems) {
+      const u = it.u;
+      const text = teacherCardForStudentUA(u);
+
+      const kb = Markup.inlineKeyboard([
+        [Markup.button.callback("Надіслати заявку", `S_REQ_${it.id}`)],
+      ]);
+
+      if (u.teacher?.photoFileId) {
+        // caption у фото ограничен, поэтому bio уже урезан
+        await ctx.replyWithPhoto(u.teacher.photoFileId, { caption: text, ...kb });
+      } else {
+        await ctx.reply(text, kb);
+      }
+    }
+
+    s.tutorList.offset = offset + pageItems.length;
+
+    const hasMore = s.tutorList.offset < list.length;
+
+    const controls = [];
+    if (hasMore) controls.push([Markup.button.callback("Показати ще 7", "S_MORE_7")]);
+    controls.push([Markup.button.callback("🔎 Змінити предмет", "S_SEARCH")]);
+    controls.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
+
+    await ctx.reply("Далі:", Markup.inlineKeyboard(controls));
+  }
+
+  // клик по предмету → сразу выдаём 7 репетиторов в чат
   bot.action(/S_SUBJECT_PICK_(\d+)/, async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "student") { await ctx.answerCbQuery(); return; }
@@ -86,79 +178,48 @@ function registerStudent(bot, deps) {
 
     s.step = null;
     s.lastStudentSubject = label;
+    s.tutorList = null; // сброс пагинации
 
-    const { top, regular } = listTeachersBySubject(label);
-    const buttons = [];
+    // меняем сообщение со списком предметов
+    try {
+      await ctx.editMessageText(`Показую перших 7 репетиторів по предмету: ${label} ✅`);
+    } catch {}
 
-    if (top.length) {
-      buttons.push([Markup.button.callback("⭐ ТОП репетитори", "S_IGNORE")]);
-      top.slice(0, 5).forEach(({ id, u }) => {
-        const name = u.meta?.first_name || "Вчитель";
-        const price = u.teacher?.price ? `${u.teacher.price}грн` : "";
-        buttons.push([Markup.button.callback(`⭐ ${name} — ${price}`, `S_VIEW_${id}`)]);
-      });
-    }
-
-    if (regular.length) {
-      buttons.push([Markup.button.callback("Звичайні", "S_IGNORE")]);
-      regular.slice(0, 10).forEach(({ id, u }) => {
-        const name = u.meta?.first_name || "Вчитель";
-        const price = u.teacher?.price ? `${u.teacher.price}грн` : "";
-        buttons.push([Markup.button.callback(`${name} — ${price}`, `S_VIEW_${id}`)]);
-      });
-    }
-
-    if (!top.length && !regular.length) {
-      await ctx.editMessageText("Поки що немає активних анкет по цьому предмету.", ui.backMenuKeyboard());
+    // если нет анкет — покажем сообщение
+    const list = buildSortedTeacherIds(label);
+    if (!list.length) {
+      await ctx.reply("Поки що немає активних анкет по цьому предмету.", Markup.inlineKeyboard([
+        [Markup.button.callback("🔎 Змінити предмет", "S_SEARCH")],
+        [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
+      ]));
       return;
     }
 
-    buttons.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
-
-    await ctx.editMessageText(`Результати по предмету: ${label}\n\nОбери вчителя:`, Markup.inlineKeyboard(buttons));
+    // сохраняем список в сессию и шлём первую страницу
+    s.tutorList = { subject: label, items: list, offset: 0 };
+    await sendTutorsPage(ctx, label);
   });
 
-  bot.action("S_IGNORE", async (ctx) => ctx.answerCbQuery());
-
-  bot.action(/S_VIEW_(\d+)/, async (ctx) => {
+  // показать следующие 7
+  bot.action("S_MORE_7", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "student") { await ctx.answerCbQuery(); return; }
 
-    const teacherId = String(ctx.match[1]);
-    const teacher = db.users[teacherId];
-
-    await ctx.answerCbQuery();
-    if (!teacher) return ctx.editMessageText("Вчителя не знайдено.", ui.backMenuKeyboard());
-
-    const text = teacherCardForStudentUA(teacher);
-
-    const rows = [];
-    if (teacher.teacher?.photoFileId) rows.push([Markup.button.callback("📷 Подивитись фото", `S_PHOTO_${teacherId}`)]);
-    rows.push([Markup.button.callback("Надіслати заявку", `S_REQ_${teacherId}`)]);
-    rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
-
-    await ctx.editMessageText(text, Markup.inlineKeyboard(rows));
-  });
-
-  bot.action(/S_PHOTO_(\d+)/, async (ctx) => {
-    const s = getSession(ctx.from.id);
-    if (s.mode !== "student") { await ctx.answerCbQuery(); return; }
-
-    const teacherId = String(ctx.match[1]);
-    const teacher = db.users[teacherId];
-
     await ctx.answerCbQuery();
 
-    if (!teacher || !teacher.teacher?.photoFileId) {
-      await ctx.reply("Фото недоступне.");
+    const subject = s.tutorList?.subject || s.lastStudentSubject;
+    if (!subject) {
+      await ctx.reply("Спочатку обери предмет.", Markup.inlineKeyboard([
+        [Markup.button.callback("🔎 Змінити предмет", "S_SEARCH")],
+        [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
+      ]));
       return;
     }
 
-    const name = teacher.meta?.first_name || "Вчитель";
-    await ctx.replyWithPhoto(teacher.teacher.photoFileId, { caption: `Фото репетитора: ${name}` });
+    await sendTutorsPage(ctx, subject);
   });
 
-  // ===== КЛЮЧОВЕ: text middleware з next() =====
+  // ===== text middleware: обработчик ввода предмета =====
   bot.on("text", async (ctx, next) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "student") return next();
