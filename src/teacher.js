@@ -120,7 +120,7 @@ function registerTeacher(bot, deps) {
   // прийом тексту (пошук предмета / ціна / опис)
   bot.on("text", async (ctx, next) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") return next();
 
     const user = getUser(ctx.from.id);
     const text = (ctx.message.text || "").trim();
