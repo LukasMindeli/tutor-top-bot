@@ -2,6 +2,8 @@ const { Telegraf } = require("telegraf");
 const ui = require("./ui");
 const { loadDB, saveDB } = require("./db");
 const { SUBJECTS, PROMO_PACKS, LIMITS } = require("./constants");
+const { SUBJECT_LABELS } = require("./subjects");
+const { searchSubjects } = require("./subjectSearch");
 const { ensureUser } = require("./helpers");
 
 const { registerTeacher } = require("./teacher");
@@ -95,9 +97,9 @@ bot.action("BACK_MENU", async (ctx) => {
 
 // реєстрація модулів
 registerTeacher(bot, {
-  db, persist, ui, SUBJECTS, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getUser, getSession
+  db, persist, ui, SUBJECTS, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getUser, getSession, SUBJECT_LABELS, searchSubjects
 });
-registerStudent(bot, { db, ui, SUBJECTS, getSession });
+registerStudent(bot, { db, ui, getSession, SUBJECT_LABELS, searchSubjects });
 registerRequests(bot, { db, persist, ui, getUser, getSession, LIMITS });
 registerPayments(bot, { db, persist, ui, getSession });
 

@@ -1,45 +1,159 @@
+const { Markup } = require("telegraf");
 const { parseNumber, isPromoActive, fmtDate, teacherCardUA, subjLabel } = require("./helpers");
 const { sendStarsInvoice, sendCardInvoice } = require("./payments");
 
-function registerTeacher(bot, deps) {
-  const { db, persist, ui, SUBJECTS, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getUser, getSession } = deps;
+function buildMatchesKeyboard(prefixPick, moreCb, matchesPage, hasMore) {
+  const rows = matchesPage.map((m) => [Markup.button.callback(m.label, `${prefixPick}_${m.idx}`)]);
+  if (hasMore) rows.push([Markup.button.callback("Показати ще", moreCb)]);
+  rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
+  return Markup.inlineKeyboard(rows);
+}
 
+function registerTeacher(bot, deps) {
+  const { db, persist, ui, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getUser, getSession, SUBJECT_LABELS, searchSubjects } = deps;
+
+  function renderSubjectMatchesText(query, offset, total) {
+    return `Введи предмет (текстом). Наприклад: математика / англ / хімія\n\n` +
+      `Запит: “${query}”\n` +
+      `Знайдено: ${total}\n` +
+      `Показую: ${offset + 1}–${Math.min(offset + 10, total)}\n\n` +
+      `Обери зі списку:`;
+  }
+
+  // старт анкети — запитуємо текстом
   bot.action("T_PROFILE", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") {
-      await ctx.answerCbQuery();
-      return;
-    }
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
+
+    s.step = "T_SUBJECT_QUERY";
+    s.subjQuery = "";
+    s.subjOffset = 0;
 
     await ctx.answerCbQuery();
     await ctx.editMessageText(
-      "Анкета вчителя — обери предмет:",
-      ui.subjectsKeyboard(SUBJECTS, "T_SUBJECT", [[require("telegraf").Markup.button.callback("⬅️ В меню", "BACK_MENU")]])
+      "Введи предмет (текстом). Наприклад: математика / англ / хімія",
+      ui.backMenuKeyboard()
     );
   });
 
-  bot.action(/T_SUBJECT_(.+)/, async (ctx) => {
+  // прийом тексту (пошук предмета / ціна / опис)
+  bot.on("text", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") return;
 
-    const subject = ctx.match[1];
+    const user = getUser(ctx.from.id);
+    const text = (ctx.message.text || "").trim();
+
+    // 1) пошук предмета
+    if (s.step === "T_SUBJECT_QUERY") {
+      if (text.length < 2) {
+        await ctx.reply("Напиши хоча б 2 символи для пошуку.");
+        return;
+      }
+
+      s.subjQuery = text;
+      s.subjOffset = 0;
+
+      const all = searchSubjects(SUBJECT_LABELS, s.subjQuery);
+      if (!all.length) {
+        await ctx.reply("Нічого не знайшов. Спробуй інший запит.");
+        return;
+      }
+
+      const page = all.slice(s.subjOffset, s.subjOffset + 10);
+      const hasMore = (s.subjOffset + 10) < all.length;
+
+      await ctx.reply(
+        renderSubjectMatchesText(s.subjQuery, s.subjOffset, all.length),
+        buildMatchesKeyboard("T_SUBJECT_PICK", "T_SUBJECT_MORE", page, hasMore)
+      );
+      return;
+    }
+
+    // 2) ціна
+    if (s.step === "T_WAIT_PRICE") {
+      const num = parseNumber(text);
+      if (num === null) return ctx.reply("Не зрозумів ціну. Напиши число (наприклад 400).");
+      if (num < LIMITS.PRICE_MIN || num > LIMITS.PRICE_MAX) {
+        return ctx.reply(`Ціна має бути ${LIMITS.PRICE_MIN}–${LIMITS.PRICE_MAX} грн. Напиши ще раз.`);
+      }
+
+      user.teacher.price = num;
+      persist();
+
+      s.step = "T_WAIT_BIO";
+      await ctx.reply(`Ціну збережено ✅ ${num} грн / 60 хв\n\nТепер напиши короткий опис (1–3 речення).`);
+      return;
+    }
+
+    // 3) опис
+    if (s.step === "T_WAIT_BIO") {
+      if (text.length < LIMITS.BIO_MIN) return ctx.reply(`Занадто коротко. Мінімум ${LIMITS.BIO_MIN} символів.`);
+      if (text.length > LIMITS.BIO_MAX) return ctx.reply(`Занадто довго. Максимум ${LIMITS.BIO_MAX} символів.`);
+
+      user.teacher.bio = text;
+      persist();
+
+      s.step = null;
+      await ctx.reply("Опис збережено ✅\n\nНатисни «Активна/Пауза», щоб увімкнути анкету в пошуку.", ui.mainMenu("teacher"));
+      return;
+    }
+  });
+
+  // показати ще по пошуку предметів
+  bot.action("T_SUBJECT_MORE", async (ctx) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
+
+    const all = searchSubjects(SUBJECT_LABELS, s.subjQuery || "");
+    await ctx.answerCbQuery();
+
+    if (!all.length) {
+      await ctx.reply("Немає результатів. Введи новий запит текстом.");
+      return;
+    }
+
+    s.subjOffset = (s.subjOffset || 0) + 10;
+    if (s.subjOffset >= all.length) s.subjOffset = 0;
+
+    const page = all.slice(s.subjOffset, s.subjOffset + 10);
+    const hasMore = (s.subjOffset + 10) < all.length;
+
+    await ctx.editMessageText(
+      renderSubjectMatchesText(s.subjQuery, s.subjOffset, all.length),
+      buildMatchesKeyboard("T_SUBJECT_PICK", "T_SUBJECT_MORE", page, hasMore)
+    );
+  });
+
+  // вибір предмета
+  bot.action(/T_SUBJECT_PICK_(\d+)/, async (ctx) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
+
+    const idx = parseInt(ctx.match[1], 10);
+    const label = SUBJECT_LABELS[idx];
     const user = getUser(ctx.from.id);
 
-    user.teacher.subject = subject;
+    await ctx.answerCbQuery();
+
+    if (!label) {
+      await ctx.reply("Помилка вибору предмета. Спробуй пошук ще раз.");
+      return;
+    }
+
+    user.teacher.subject = label;
     persist();
 
     s.step = "T_WAIT_PRICE";
-
-    await ctx.answerCbQuery();
     await ctx.editMessageText(
-      `Предмет: ${subjLabel(subject)} ✅\n\nВведи ціну за 60 хв (число). Діапазон ${LIMITS.PRICE_MIN}–${LIMITS.PRICE_MAX}.`,
+      `Предмет: ${label} ✅\n\nВведи ціну за 60 хв (число). Діапазон ${LIMITS.PRICE_MIN}–${LIMITS.PRICE_MAX}.`,
       ui.backMenuKeyboard()
     );
   });
 
   bot.action("T_SHOW_PROFILE", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
     const user = getUser(ctx.from.id);
     await ctx.answerCbQuery();
@@ -48,11 +162,10 @@ function registerTeacher(bot, deps) {
 
   bot.action("T_TOGGLE_ACTIVE", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
     const user = getUser(ctx.from.id);
 
-    // не даємо активувати незаповнену анкету
     if (!user.teacher.subject || !user.teacher.price || !user.teacher.bio) {
       await ctx.answerCbQuery();
       await ctx.reply("Спочатку заповни анкету (предмет, ціна, опис).");
@@ -72,7 +185,7 @@ function registerTeacher(bot, deps) {
   // видалення анкети
   bot.action("T_DELETE_PROFILE", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
     await ctx.answerCbQuery();
     await ctx.editMessageText(
@@ -83,13 +196,12 @@ function registerTeacher(bot, deps) {
 
   bot.action("T_DELETE_CONFIRM", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
     const user = getUser(ctx.from.id);
 
     user.teacher = { subject: null, price: null, bio: null, isActive: false };
     user.promos = {};
-    // чистимо заявки на цього вчителя
     for (const [id, r] of Object.entries(db.requests || {})) {
       if (String(r.teacherId) === String(ctx.from.id)) delete db.requests[id];
     }
@@ -104,7 +216,7 @@ function registerTeacher(bot, deps) {
   // ТОП
   bot.action("T_PROMO", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
     const user = getUser(ctx.from.id);
     await ctx.answerCbQuery();
@@ -120,14 +232,14 @@ function registerTeacher(bot, deps) {
       : "ТОП зараз не активний";
 
     await ctx.editMessageText(
-      `ТОП (як у Buki)\n\nПредмет: ${subjLabel(subject)}\n${line}\n\nОбери термін:`,
+      `ТОП (як у Buki)\n\nПредмет: ${subject}\n${line}\n\nОбери термін:`,
       ui.promoPacksKeyboard(PROMO_PACKS)
     );
   });
 
   bot.action(/PROMO_DAYS_(\d+)/, async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
     const days = parseInt(ctx.match[1], 10);
     const pack = PROMO_PACKS.find((p) => p.days === days);
@@ -144,14 +256,14 @@ function registerTeacher(bot, deps) {
     };
 
     await ctx.editMessageText(
-      `Покупка ТОП\n\nПредмет: ${subjLabel(s.pendingPromo.subject)}\nТермін: ${pack.days} днів\nЦіна: ${pack.priceUah} грн або ${pack.priceStars} ⭐\n\nОбери оплату:`,
+      `Покупка ТОП\n\nПредмет: ${s.pendingPromo.subject}\nТермін: ${pack.days} днів\nЦіна: ${pack.priceUah} грн або ${pack.priceStars} ⭐\n\nОбери оплату:`,
       ui.promoPayKeyboard()
     );
   });
 
   bot.action("PROMO_PAY_STARS", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
     await ctx.answerCbQuery();
     if (!s.pendingPromo) return ctx.reply("Спочатку обери термін ТОП.");
@@ -161,7 +273,7 @@ function registerTeacher(bot, deps) {
 
   bot.action("PROMO_PAY_CARD", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
 
     await ctx.answerCbQuery();
     if (!s.pendingPromo) return ctx.reply("Спочатку обери термін ТОП.");
@@ -172,42 +284,6 @@ function registerTeacher(bot, deps) {
     }
 
     await sendCardInvoice(ctx, CARD_PROVIDER_TOKEN, s.pendingPromo);
-  });
-
-  // текстові кроки анкети (ціна/опис)
-  bot.on("text", async (ctx) => {
-    const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
-
-    const user = getUser(ctx.from.id);
-    const text = (ctx.message.text || "").trim();
-
-    if (s.step === "T_WAIT_PRICE") {
-      const num = parseNumber(text);
-      if (num === null) return ctx.reply("Не зрозумів ціну. Напиши число (наприклад 400).");
-      if (num < LIMITS.PRICE_MIN || num > LIMITS.PRICE_MAX) {
-        return ctx.reply(`Ціна має бути ${LIMITS.PRICE_MIN}–${LIMITS.PRICE_MAX} грн. Напиши ще раз.`);
-      }
-
-      user.teacher.price = num;
-      persist();
-
-      s.step = "T_WAIT_BIO";
-      await ctx.reply(`Ціну збережено ✅ ${num} грн / 60 хв\n\nТепер напиши короткий опис (1–3 речення).`);
-      return;
-    }
-
-    if (s.step === "T_WAIT_BIO") {
-      if (text.length < LIMITS.BIO_MIN) return ctx.reply(`Занадто коротко. Мінімум ${LIMITS.BIO_MIN} символів.`);
-      if (text.length > LIMITS.BIO_MAX) return ctx.reply(`Занадто довго. Максимум ${LIMITS.BIO_MAX} символів.`);
-
-      user.teacher.bio = text;
-      persist();
-
-      s.step = null;
-      await ctx.reply("Опис збережено ✅\n\nНатисни «Активна/Пауза», щоб увімкнути анкету в пошуку.", ui.mainMenu("teacher"));
-      return;
-    }
   });
 }
 
