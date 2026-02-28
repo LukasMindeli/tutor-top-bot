@@ -30,9 +30,9 @@ function registerProofs(bot, deps) {
   });
 
   // Учитель: ловим фото, создаём proof и отправляем админу
-  bot.on("photo", async (ctx) => {
+  bot.on("photo", async (ctx, next) => {
     const s = getSession(ctx.from.id);
-    if (s.step !== "T_WAIT_LEAD_PAYPROOF") return;
+    if (s.step !== "T_WAIT_LEAD_PAYPROOF") return next();
 
     const reqId = s.leadProofReqId;
     s.step = null;
