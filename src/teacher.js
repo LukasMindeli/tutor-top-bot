@@ -2,25 +2,30 @@ const { Markup } = require("telegraf");
 const { parseNumber, isPromoActive, fmtDate, teacherCardUA, subjLabel } = require("./helpers");
 const { sendStarsInvoice, sendCardInvoice } = require("./payments");
 
-function buildMatchesKeyboard(prefixPick, moreCb, matchesPage, hasMore) {
-  const rows = matchesPage.map((m) => [Markup.button.callback(m.label, `${prefixPick}_${m.idx}`)]);
+function buildMatchesKeyboard(prefixPick, moreCb, page, hasMore) {
+  const rows = page.map((m) => [Markup.button.callback(m.label, `${prefixPick}_${m.idx}`)]);
   if (hasMore) rows.push([Markup.button.callback("Показати ще", moreCb)]);
   rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
   return Markup.inlineKeyboard(rows);
 }
 
 function registerTeacher(bot, deps) {
-  const { db, persist, ui, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getUser, getSession, SUBJECT_LABELS, searchSubjects } = deps;
+  const {
+    db, persist, ui, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN,
+    getUser, getSession, SUBJECT_LABELS, searchSubjects
+  } = deps;
 
   function renderSubjectMatchesText(query, offset, total) {
-    return `Введи предмет (текстом). Наприклад: математика / англ / хімія\n\n` +
+    return (
+      `Введи предмет (текстом). Наприклад: математика / англ / хімія\n\n` +
       `Запит: “${query}”\n` +
       `Знайдено: ${total}\n` +
       `Показую: ${offset + 1}–${Math.min(offset + 10, total)}\n\n` +
-      `Обери зі списку:`;
+      `Обери зі списку:`
+    );
   }
 
-  // ===== Фото меню =====
+  // ===== Фото анкети =====
   bot.action("T_PHOTO_MENU", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
@@ -47,10 +52,7 @@ function registerTeacher(bot, deps) {
     s.step = "T_WAIT_PHOTO";
 
     await ctx.answerCbQuery();
-    await ctx.editMessageText(
-      "Надішли одне фото сюди в чат (як звичайне фото в Telegram).",
-      ui.backMenuKeyboard()
-    );
+    await ctx.editMessageText("Надішли одне фото сюди в чат (як звичайне фото в Telegram).", ui.backMenuKeyboard());
   });
 
   bot.action("T_PHOTO_DELETE", async (ctx) => {
@@ -76,14 +78,12 @@ function registerTeacher(bot, deps) {
       await ctx.reply("Фото ще не додано.");
       return;
     }
-
     await ctx.replyWithPhoto(user.teacher.photoFileId, { caption: "Фото з анкети" });
   });
 
-  // Приём фото
   bot.on("photo", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return next();
+    if (s.mode !== "teacher") return;
     if (s.step !== "T_WAIT_PHOTO") return;
 
     const user = getUser(ctx.from.id);
@@ -101,7 +101,7 @@ function registerTeacher(bot, deps) {
     await ctx.reply("Фото збережено ✅", ui.mainMenu("teacher"));
   });
 
-  // ===== анкета — предмет через текст =====
+  // ===== Анкета: предмет через текст =====
   bot.action("T_PROFILE", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
@@ -111,80 +111,9 @@ function registerTeacher(bot, deps) {
     s.subjOffset = 0;
 
     await ctx.answerCbQuery();
-    await ctx.editMessageText(
-      "Введи предмет (текстом). Наприклад: математика / англ / хімія",
-      ui.backMenuKeyboard()
-    );
+    await ctx.editMessageText("Введи предмет (текстом). Наприклад: математика / англ / хімія", ui.backMenuKeyboard());
   });
 
-  // прийом тексту (пошук предмета / ціна / опис)
-  bot.on("text", async (ctx, next) => {
-    const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return next();
-
-    const user = getUser(ctx.from.id);
-    const text = (ctx.message.text || "").trim();
-
-    // якщо чекаємо фото — текст ігноруємо
-    if (s.step === "T_WAIT_PHOTO") { await ctx.reply("Зараз очікую фото. Надішли фото повідомленням 📷"); return; }
-
-    // 1) пошук предмета
-    if (s.step === "T_SUBJECT_QUERY") {
-      if (text.length < 2) {
-        await ctx.reply("Напиши хоча б 2 символи для пошуку.");
-        return;
-      }
-
-      s.subjQuery = text;
-      s.subjOffset = 0;
-
-      const all = searchSubjects(SUBJECT_LABELS, s.subjQuery);
-      if (!all.length) {
-        await ctx.reply("Нічого не знайшов. Спробуй інший запит.");
-        return;
-      }
-
-      const page = all.slice(s.subjOffset, s.subjOffset + 10);
-      const hasMore = (s.subjOffset + 10) < all.length;
-
-      await ctx.reply(
-        renderSubjectMatchesText(s.subjQuery, s.subjOffset, all.length),
-        buildMatchesKeyboard("T_SUBJECT_PICK", "T_SUBJECT_MORE", page, hasMore)
-      );
-      return;
-    }
-
-    // 2) ціна
-    if (s.step === "T_WAIT_PRICE") {
-      const num = parseNumber(text);
-      if (num === null) return ctx.reply("Не зрозумів ціну. Напиши число (наприклад 400).");
-      if (num < LIMITS.PRICE_MIN || num > LIMITS.PRICE_MAX) {
-        return ctx.reply(`Ціна має бути ${LIMITS.PRICE_MIN}–${LIMITS.PRICE_MAX} грн. Напиши ще раз.`);
-      }
-
-      user.teacher.price = num;
-      persist();
-
-      s.step = "T_WAIT_BIO";
-      await ctx.reply(`Ціну збережено ✅ ${num} грн / 60 хв\n\nТепер напиши короткий опис (1–3 речення).`);
-      return;
-    }
-
-    // 3) опис
-    if (s.step === "T_WAIT_BIO") {
-      if (text.length < LIMITS.BIO_MIN) return ctx.reply(`Занадто коротко. Мінімум ${LIMITS.BIO_MIN} символів.`);
-      if (text.length > LIMITS.BIO_MAX) return ctx.reply(`Занадто довго. Максимум ${LIMITS.BIO_MAX} символів.`);
-
-      user.teacher.bio = text;
-      persist();
-
-      s.step = null;
-      await ctx.reply("Опис збережено ✅\n\nНатисни «Активна/Пауза», щоб увімкнути анкету в пошуку.", ui.mainMenu("teacher"));
-      return;
-    }
-  });
-
-  // показати ще по пошуку предметів
   bot.action("T_SUBJECT_MORE", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
@@ -209,7 +138,6 @@ function registerTeacher(bot, deps) {
     );
   });
 
-  // вибір предмета
   bot.action(/T_SUBJECT_PICK_(\d+)/, async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
@@ -266,7 +194,6 @@ function registerTeacher(bot, deps) {
     );
   });
 
-  // видалення анкети
   bot.action("T_DELETE_PROFILE", async (ctx) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") { await ctx.answerCbQuery(); return; }
@@ -368,6 +295,80 @@ function registerTeacher(bot, deps) {
     }
 
     await sendCardInvoice(ctx, CARD_PROVIDER_TOKEN, s.pendingPromo);
+  });
+
+  // ===== КЛЮЧОВЕ: text middleware з next() =====
+  bot.on("text", async (ctx, next) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "teacher") return next();
+
+    // якщо чекаємо фото — не пропускаємо в інші хендлери
+    if (s.step === "T_WAIT_PHOTO") {
+      await ctx.reply("Зараз очікую фото 📷. Надішли фото повідомленням.");
+      return;
+    }
+
+    const user = getUser(ctx.from.id);
+    const text = (ctx.message.text || "").trim();
+
+    // 1) пошук предмета
+    if (s.step === "T_SUBJECT_QUERY") {
+      if (text.length < 2) {
+        await ctx.reply("Напиши хоча б 2 символи для пошуку.");
+        return;
+      }
+
+      s.subjQuery = text;
+      s.subjOffset = 0;
+
+      const all = searchSubjects(SUBJECT_LABELS, s.subjQuery);
+      if (!all.length) {
+        await ctx.reply("Нічого не знайшов. Спробуй інший запит.");
+        return;
+      }
+
+      const page = all.slice(0, 10);
+      const hasMore = all.length > 10;
+
+      await ctx.reply(
+        renderSubjectMatchesText(s.subjQuery, 0, all.length),
+        buildMatchesKeyboard("T_SUBJECT_PICK", "T_SUBJECT_MORE", page, hasMore)
+      );
+      return;
+    }
+
+    // 2) ціна
+    if (s.step === "T_WAIT_PRICE") {
+      const num = parseNumber(text);
+      if (num === null) { await ctx.reply("Не зрозумів ціну. Напиши число (наприклад 400)."); return; }
+      if (num < LIMITS.PRICE_MIN || num > LIMITS.PRICE_MAX) {
+        await ctx.reply(`Ціна має бути ${LIMITS.PRICE_MIN}–${LIMITS.PRICE_MAX} грн. Напиши ще раз.`);
+        return;
+      }
+
+      user.teacher.price = num;
+      persist();
+
+      s.step = "T_WAIT_BIO";
+      await ctx.reply(`Ціну збережено ✅ ${num} грн / 60 хв\n\nТепер напиши короткий опис (1–3 речення).`);
+      return;
+    }
+
+    // 3) опис
+    if (s.step === "T_WAIT_BIO") {
+      if (text.length < LIMITS.BIO_MIN) { await ctx.reply(`Занадто коротко. Мінімум ${LIMITS.BIO_MIN} символів.`); return; }
+      if (text.length > LIMITS.BIO_MAX) { await ctx.reply(`Занадто довго. Максимум ${LIMITS.BIO_MAX} символів.`); return; }
+
+      user.teacher.bio = text;
+      persist();
+
+      s.step = null;
+      await ctx.reply("Опис збережено ✅\n\nНатисни «Активна/Пауза», щоб увімкнути анкету в пошуку.", ui.mainMenu("teacher"));
+      return;
+    }
+
+    // якщо цей текст не про вчителя — пропускаємо
+    return next();
   });
 }
 

@@ -1,8 +1,8 @@
 const { Markup } = require("telegraf");
 const { teacherCardForStudentUA, isPromoActive } = require("./helpers");
 
-function buildMatchesKeyboard(prefixPick, moreCb, matchesPage, hasMore) {
-  const rows = matchesPage.map((m) => [Markup.button.callback(m.label, `${prefixPick}_${m.idx}`)]);
+function buildMatchesKeyboard(prefixPick, moreCb, page, hasMore) {
+  const rows = page.map((m) => [Markup.button.callback(m.label, `${prefixPick}_${m.idx}`)]);
   if (hasMore) rows.push([Markup.button.callback("Показати ще", moreCb)]);
   rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
   return Markup.inlineKeyboard(rows);
@@ -12,11 +12,13 @@ function registerStudent(bot, deps) {
   const { db, ui, getSession, SUBJECT_LABELS, searchSubjects } = deps;
 
   function renderSubjectMatchesText(query, offset, total) {
-    return `Введи предмет (текстом). Наприклад: математика / англ / хімія\n\n` +
+    return (
+      `Введи предмет (текстом). Наприклад: математика / англ / хімія\n\n` +
       `Запит: “${query}”\n` +
       `Знайдено: ${total}\n` +
       `Показую: ${offset + 1}–${Math.min(offset + 10, total)}\n\n` +
-      `Обери зі списку:`;
+      `Обери зі списку:`
+    );
   }
 
   bot.action("S_SEARCH", async (ctx) => {
@@ -31,36 +33,6 @@ function registerStudent(bot, deps) {
     await ctx.editMessageText(
       "Введи предмет (текстом). Наприклад: математика / англ / хімія",
       ui.backMenuKeyboard()
-    );
-  });
-
-  bot.on("text", async (ctx, next) => {
-    const s = getSession(ctx.from.id);
-    if (s.mode !== "student") return next();
-
-    if (s.step !== "S_SUBJECT_QUERY") return next();
-
-    const text = (ctx.message.text || "").trim();
-    if (text.length < 2) {
-      await ctx.reply("Напиши хоча б 2 символи для пошуку.");
-      return;
-    }
-
-    s.subjQuery = text;
-    s.subjOffset = 0;
-
-    const all = searchSubjects(SUBJECT_LABELS, s.subjQuery);
-    if (!all.length) {
-      await ctx.reply("Нічого не знайшов. Спробуй інший запит.");
-      return;
-    }
-
-    const page = all.slice(s.subjOffset, s.subjOffset + 10);
-    const hasMore = (s.subjOffset + 10) < all.length;
-
-    await ctx.reply(
-      renderSubjectMatchesText(s.subjQuery, s.subjOffset, all.length),
-      buildMatchesKeyboard("S_SUBJECT_PICK", "S_SUBJECT_MORE", page, hasMore)
     );
   });
 
@@ -143,10 +115,7 @@ function registerStudent(bot, deps) {
 
     buttons.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
 
-    await ctx.editMessageText(
-      `Результати по предмету: ${label}\n\nОбери вчителя:`,
-      Markup.inlineKeyboard(buttons)
-    );
+    await ctx.editMessageText(`Результати по предмету: ${label}\n\nОбери вчителя:`, Markup.inlineKeyboard(buttons));
   });
 
   bot.action("S_IGNORE", async (ctx) => ctx.answerCbQuery());
@@ -164,9 +133,7 @@ function registerStudent(bot, deps) {
     const text = teacherCardForStudentUA(teacher);
 
     const rows = [];
-    if (teacher.teacher?.photoFileId) {
-      rows.push([Markup.button.callback("📷 Подивитись фото", `S_PHOTO_${teacherId}`)]);
-    }
+    if (teacher.teacher?.photoFileId) rows.push([Markup.button.callback("📷 Подивитись фото", `S_PHOTO_${teacherId}`)]);
     rows.push([Markup.button.callback("Надіслати заявку", `S_REQ_${teacherId}`)]);
     rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
 
@@ -189,6 +156,36 @@ function registerStudent(bot, deps) {
 
     const name = teacher.meta?.first_name || "Вчитель";
     await ctx.replyWithPhoto(teacher.teacher.photoFileId, { caption: `Фото репетитора: ${name}` });
+  });
+
+  // ===== КЛЮЧОВЕ: text middleware з next() =====
+  bot.on("text", async (ctx, next) => {
+    const s = getSession(ctx.from.id);
+    if (s.mode !== "student") return next();
+    if (s.step !== "S_SUBJECT_QUERY") return next();
+
+    const text = (ctx.message.text || "").trim();
+    if (text.length < 2) {
+      await ctx.reply("Напиши хоча б 2 символи для пошуку.");
+      return;
+    }
+
+    s.subjQuery = text;
+    s.subjOffset = 0;
+
+    const all = searchSubjects(SUBJECT_LABELS, s.subjQuery);
+    if (!all.length) {
+      await ctx.reply("Нічого не знайшов. Спробуй інший запит.");
+      return;
+    }
+
+    const page = all.slice(0, 10);
+    const hasMore = all.length > 10;
+
+    await ctx.reply(
+      renderSubjectMatchesText(s.subjQuery, 0, all.length),
+      buildMatchesKeyboard("S_SUBJECT_PICK", "S_SUBJECT_MORE", page, hasMore)
+    );
   });
 }
 
