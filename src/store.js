@@ -82,6 +82,15 @@ async function updateTeacherProfile(telegramId, patch) {
   if (error) console.error("updateTeacherProfile error:", error.message);
 }
 
+async function setTeacherPoints(telegramId, points) {
+  await ensureTeacherProfile(telegramId);
+  const { error } = await supabase
+    .from("teacher_profiles")
+    .update({ points: points, updated_at: isoNow() })
+    .eq("telegram_id", String(telegramId));
+  if (error) console.error("setTeacherPoints error:", error.message);
+}
+
 async function deleteTeacherProfile(telegramId) {
   const tid = String(telegramId);
 
@@ -246,6 +255,7 @@ module.exports = {
   ensureTeacherProfile,
   getTeacherProfile,
   updateTeacherProfile,
+  setTeacherPoints,
   deleteTeacherProfile,
 
   addPromo,

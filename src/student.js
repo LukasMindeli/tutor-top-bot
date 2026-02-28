@@ -14,13 +14,14 @@ function teacherTextUA(t) {
   const price = t.price ? `${t.price} грн / 60 хв` : "—";
   const bio = truncate(t.bio || "—", 450);
   const photo = t.photo_file_id ? "✅ Є" : "—";
+  const points = Number.isFinite(t.points) ? t.points : 0;
 
   return (
     `${topLine}` +
     `👤 ${name}\n` +
     `Предмет: ${t.subject}\n` +
     `Ціна: ${price}\n` +
-    `Фото: ${photo}\n\n` +
+    `Фото: \nБали: \n\n` +
     `Опис:\n${bio}`
   );
 }

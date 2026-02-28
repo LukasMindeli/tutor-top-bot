@@ -151,6 +151,7 @@ function registerTeacher(bot, deps) {
     const price = prof?.price ? `${prof.price} грн / 60 хв` : "—";
     const bio = prof?.bio ? prof.bio : "—";
     const subject = prof?.subject || "—";
+    const points = Number.isFinite(prof?.points) ? prof.points : 0;
 
     const promoUntil = prof?.subject ? await store.getActivePromoForTeacher(ctx.from.id, prof.subject) : null;
     const promoLine = promoUntil ? `⭐ ТОП активний до ${fmtDate(promoUntil)}` : "⭐ ТОП: —";
@@ -163,6 +164,7 @@ function registerTeacher(bot, deps) {
       `Предмет: ${subject}\n` +
       `Ціна: ${price}\n` +
       `Фото: ${photo}\n` +
+      `Бали: ${points}\n` +
       `${promoLine}\n\n` +
       `Опис:\n${bio}`,
       ui.backMenuKeyboard()
@@ -196,7 +198,7 @@ function registerTeacher(bot, deps) {
 
     await ctx.answerCbQuery();
     await ctx.editMessageText(
-      "⚠️ Видалити анкету?\n\nБуде видалено:\n- предмет, ціна, опис\n- фото\n- статус активності\n- усі ТОП-статуси\n\nДію не можна скасувати.",
+      "⚠️ Видалити анкету?\n\nБуде видалено:\n- предмет, ціна, опис\n- фото\n- статус активності\n- усі ТОП-статуси\n- бали\n\nДію не можна скасувати.",
       ui.confirmDeleteKeyboard()
     );
   });
