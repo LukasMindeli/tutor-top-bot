@@ -83,7 +83,7 @@ function registerTeacher(bot, deps) {
   // Приём фото
   bot.on("photo", async (ctx) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return;
+    if (s.mode !== "teacher") return next();
     if (s.step !== "T_WAIT_PHOTO") return;
 
     const user = getUser(ctx.from.id);
@@ -118,7 +118,7 @@ function registerTeacher(bot, deps) {
   });
 
   // прийом тексту (пошук предмета / ціна / опис)
-  bot.on("text", async (ctx) => {
+  bot.on("text", async (ctx, next) => {
     const s = getSession(ctx.from.id);
     if (s.mode !== "teacher") return;
 
@@ -126,7 +126,7 @@ function registerTeacher(bot, deps) {
     const text = (ctx.message.text || "").trim();
 
     // якщо чекаємо фото — текст ігноруємо
-    if (s.step === "T_WAIT_PHOTO") return;
+    if (s.step === "T_WAIT_PHOTO") { await ctx.reply("Зараз очікую фото. Надішли фото повідомленням 📷"); return; }
 
     // 1) пошук предмета
     if (s.step === "T_SUBJECT_QUERY") {

@@ -34,11 +34,11 @@ function registerStudent(bot, deps) {
     );
   });
 
-  bot.on("text", async (ctx) => {
+  bot.on("text", async (ctx, next) => {
     const s = getSession(ctx.from.id);
-    if (s.mode !== "student") return;
+    if (s.mode !== "student") return next();
 
-    if (s.step !== "S_SUBJECT_QUERY") return;
+    if (s.step !== "S_SUBJECT_QUERY") return next();
 
     const text = (ctx.message.text || "").trim();
     if (text.length < 2) {
