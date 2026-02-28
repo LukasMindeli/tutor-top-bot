@@ -1,4 +1,6 @@
+const { Markup } = require("telegraf");
 const { tgUserLink } = require("./helpers");
+const ext = require("./store_ext");
 
 function registerRequests(bot, deps) {
   const { store, ui, getUserSession, LIMITS } = deps;
@@ -39,35 +41,34 @@ function registerRequests(bot, deps) {
     await ctx.editMessageText("Заявку надіслано ✅", ui.backMenuKeyboard());
   });
 
-  // учитель прийняв
+  // учитель прийняв → +1 бал → учню кнопки "урок був/не домовились"
   bot.action(/T_REQ_ACCEPT_([0-9a-fA-F-]{36})/, async (ctx) => {
     const reqId = ctx.match[1];
     await ctx.answerCbQuery();
 
-    const current = await store.getRequestById(reqId);
-    if (!current) return ctx.reply("Заявку не знайдено.");
-    if (String(current.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
-    if (current.status !== "pending") return ctx.reply("Ця заявка вже оброблена.");
+    // меняем статус строго pending -> accepted
+    const updated = await ext.updateRequestStatusGuard(reqId, "teacher_id", ctx.from.id, "pending", "accepted");
+    if (!updated) return ctx.reply("Заявка вже оброблена або це не твоя заявка.");
 
-    const req = await store.updateRequestStatus(reqId, ctx.from.id, "accepted");
-    if (!req) return ctx.reply("Не вдалося оновити заявку.");
-
-    // +1 бал за прийняття заявки
-    const prof = await store.getTeacherProfile(ctx.from.id);
-    const curPts = Number.isFinite(prof?.points) ? prof.points : 0;
-    await store.updateTeacherProfile(ctx.from.id, { points: curPts + 1 });
+    // +1 бал за прийняття
+    await ext.incrementTeacherPoints(ctx.from.id, 1);
 
     const teacherMeta = await store.getUserMeta(ctx.from.id);
     const teacherLink = tgUserLink(ctx.from.id, teacherMeta?.username);
 
+    // ученику — 2 кнопки подтверждения результата
     try {
       await bot.telegram.sendMessage(
-        req.student_id,
-        `✅ Вчитель прийняв заявку!\nПредмет: ${req.subject || "—"}\n\nНапиши вчителю: ${teacherLink}`
+        updated.student_id,
+        `✅ Вчитель прийняв заявку!\nПредмет: ${updated.subject || "—"}\n\nНапиши вчителю: ${teacherLink}\n\nПотім натисни результат:`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback("✅ Урок відбувся (+3 бали вчителю)", `S_REQ_DONE_${reqId}`)],
+          [Markup.button.callback("❌ Не домовились (0 балів)", `S_REQ_CANCEL_${reqId}`)],
+        ])
       );
     } catch (e) {}
 
-    await ctx.editMessageText(`✅ Прийнято\n(+1 бал)`);
+    await ctx.editMessageText("✅ Прийнято (+1 бал)");
   });
 
   // учитель відхилив
@@ -75,22 +76,56 @@ function registerRequests(bot, deps) {
     const reqId = ctx.match[1];
     await ctx.answerCbQuery();
 
-    const current = await store.getRequestById(reqId);
-    if (!current) return ctx.reply("Заявку не знайдено.");
-    if (String(current.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
-    if (current.status !== "pending") return ctx.reply("Ця заявка вже оброблена.");
-
-    const req = await store.updateRequestStatus(reqId, ctx.from.id, "declined");
-    if (!req) return ctx.reply("Не вдалося оновити заявку.");
+    const updated = await ext.updateRequestStatusGuard(reqId, "teacher_id", ctx.from.id, "pending", "declined");
+    if (!updated) return ctx.reply("Заявка вже оброблена або це не твоя заявка.");
 
     try {
       await bot.telegram.sendMessage(
-        req.student_id,
-        `❌ Вчитель відхилив заявку.\nПредмет: ${req.subject || "—"}`
+        updated.student_id,
+        `❌ Вчитель відхилив заявку.\nПредмет: ${updated.subject || "—"}`
       );
     } catch (e) {}
 
     await ctx.editMessageText("❌ Відхилено");
+  });
+
+  // ученик подтверждает: урок был → accepted -> completed → учителю +3
+  bot.action(/S_REQ_DONE_([0-9a-fA-F-]{36})/, async (ctx) => {
+    const reqId = ctx.match[1];
+    await ctx.answerCbQuery();
+
+    const updated = await ext.updateRequestStatusGuard(reqId, "student_id", ctx.from.id, "accepted", "completed");
+    if (!updated) return ctx.reply("Цю дію вже виконано або заявка не в статусі 'accepted'.");
+
+    await ext.incrementTeacherPoints(updated.teacher_id, 3);
+
+    // уведомим учителя
+    try {
+      await bot.telegram.sendMessage(
+        updated.teacher_id,
+        `🎉 Учень підтвердив: урок відбувся.\nПредмет: ${updated.subject || "—"}\n(+3 бали)`
+      );
+    } catch (e) {}
+
+    await ctx.editMessageText("Дякую ✅ Позначив як: урок відбувся.");
+  });
+
+  // ученик подтверждает: не договорились → accepted -> cancelled → 0 баллов
+  bot.action(/S_REQ_CANCEL_([0-9a-fA-F-]{36})/, async (ctx) => {
+    const reqId = ctx.match[1];
+    await ctx.answerCbQuery();
+
+    const updated = await ext.updateRequestStatusGuard(reqId, "student_id", ctx.from.id, "accepted", "cancelled");
+    if (!updated) return ctx.reply("Цю дію вже виконано або заявка не в статусі 'accepted'.");
+
+    try {
+      await bot.telegram.sendMessage(
+        updated.teacher_id,
+        `ℹ️ Учень позначив: не домовились.\nПредмет: ${updated.subject || "—"}`
+      );
+    } catch (e) {}
+
+    await ctx.editMessageText("Ок. Позначив як: не домовились.");
   });
 }
 
