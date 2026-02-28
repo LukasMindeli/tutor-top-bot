@@ -1,11 +1,10 @@
 const { Markup } = require("telegraf");
 const { tgUserLink } = require("./helpers");
-const ext = require("./store_ext");
+const { sendLeadInvoiceStars, sendLeadInvoiceCard } = require("./payments");
 
 function registerRequests(bot, deps) {
-  const { store, ui, getUserSession, LIMITS } = deps;
+  const { store, ui, getUserSession, LIMITS, CARD_PROVIDER_TOKEN } = deps;
 
-  // студент надсилає заявку
   bot.action(/S_REQ_(\d+)/, async (ctx) => {
     const s = getUserSession(ctx.from.id);
     if (s.mode !== "student") { await ctx.answerCbQuery(); return; }
@@ -41,91 +40,87 @@ function registerRequests(bot, deps) {
     await ctx.editMessageText("Заявку надіслано ✅", ui.backMenuKeyboard());
   });
 
-  // учитель прийняв → +1 бал → учню кнопки "урок був/не домовились"
   bot.action(/T_REQ_ACCEPT_([0-9a-fA-F-]{36})/, async (ctx) => {
     const reqId = ctx.match[1];
     await ctx.answerCbQuery();
 
-    // меняем статус строго pending -> accepted
-    const updated = await ext.updateRequestStatusGuard(reqId, "teacher_id", ctx.from.id, "pending", "accepted");
+    const updated = await store.updateRequestStatus(reqId, ctx.from.id, "accepted");
     if (!updated) return ctx.reply("Заявка вже оброблена або це не твоя заявка.");
-
-    // +1 бал за прийняття
-    await ext.incrementTeacherPoints(ctx.from.id, 1);
 
     const teacherMeta = await store.getUserMeta(ctx.from.id);
     const teacherLink = tgUserLink(ctx.from.id, teacherMeta?.username);
 
-    // ученику — 2 кнопки подтверждения результата
+    const studentMeta = await store.getUserMeta(updated.student_id);
+    const studentLink = tgUserLink(updated.student_id, studentMeta?.username);
+
+    // ученик получает контакт учителя сразу
     try {
       await bot.telegram.sendMessage(
         updated.student_id,
-        `✅ Вчитель прийняв заявку!\nПредмет: ${updated.subject || "—"}\n\nНапиши вчителю: ${teacherLink}\n\nПотім натисни результат:`,
-        Markup.inlineKeyboard([
-          [Markup.button.callback("✅ Урок відбувся (+3 бали вчителю)", `S_REQ_DONE_${reqId}`)],
-          [Markup.button.callback("❌ Не домовились (0 балів)", `S_REQ_CANCEL_${reqId}`)],
-        ])
+        `✅ Вчитель прийняв заявку!\nПредмет: ${updated.subject || "—"}\n\nКонтакт вчителя: ${teacherLink}`
       );
     } catch (e) {}
 
-    await ctx.editMessageText("✅ Прийнято (+1 бал)");
+    // учитель видит контакт ученика + кнопки добровольной оплаты
+    await ctx.editMessageText(
+      `✅ Прийнято\n\nКонтакт учня: ${studentLink}\n\nХочеш отримати бали та збільшити лічильник учнів?\nОплати лід (добровільно):`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("Оплатити ⭐ Stars", `T_LEAD_PAY_STARS_${reqId}`)],
+        [Markup.button.callback("Оплатити 💳 карткою", `T_LEAD_PAY_CARD_${reqId}`)],
+      ])
+    );
   });
 
-  // учитель відхилив
   bot.action(/T_REQ_DECLINE_([0-9a-fA-F-]{36})/, async (ctx) => {
     const reqId = ctx.match[1];
     await ctx.answerCbQuery();
 
-    const updated = await ext.updateRequestStatusGuard(reqId, "teacher_id", ctx.from.id, "pending", "declined");
-    if (!updated) return ctx.reply("Заявка вже оброблена або це не твоя заявка.");
+    const req = await store.getRequestById(reqId);
+    if (!req) return ctx.reply("Заявку не знайдено.");
+    if (String(req.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
+    if (req.status !== "pending") return ctx.reply("Ця заявка вже оброблена.");
+
+    await store.updateRequestStatus(reqId, ctx.from.id, "declined");
 
     try {
       await bot.telegram.sendMessage(
-        updated.student_id,
-        `❌ Вчитель відхилив заявку.\nПредмет: ${updated.subject || "—"}`
+        req.student_id,
+        `❌ Вчитель відхилив заявку.\nПредмет: ${req.subject || "—"}`
       );
     } catch (e) {}
 
     await ctx.editMessageText("❌ Відхилено");
   });
 
-  // ученик подтверждает: урок был → accepted -> completed → учителю +3
-  bot.action(/S_REQ_DONE_([0-9a-fA-F-]{36})/, async (ctx) => {
+  bot.action(/T_LEAD_PAY_STARS_([0-9a-fA-F-]{36})/, async (ctx) => {
     const reqId = ctx.match[1];
     await ctx.answerCbQuery();
 
-    const updated = await ext.updateRequestStatusGuard(reqId, "student_id", ctx.from.id, "accepted", "completed");
-    if (!updated) return ctx.reply("Цю дію вже виконано або заявка не в статусі 'accepted'.");
+    const req = await store.getRequestById(reqId);
+    if (!req) return ctx.reply("Заявку не знайдено.");
+    if (String(req.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
+    if (req.lead_paid) return ctx.reply("Цей лід вже оплачено ✅");
+    if (req.status !== "accepted") return ctx.reply("Оплата доступна лише після прийняття заявки.");
 
-    await ext.incrementTeacherPoints(updated.teacher_id, 3);
-
-    // уведомим учителя
-    try {
-      await bot.telegram.sendMessage(
-        updated.teacher_id,
-        `🎉 Учень підтвердив: урок відбувся.\nПредмет: ${updated.subject || "—"}\n(+3 бали)`
-      );
-    } catch (e) {}
-
-    await ctx.editMessageText("Дякую ✅ Позначив як: урок відбувся.");
+    await sendLeadInvoiceStars(ctx, reqId);
   });
 
-  // ученик подтверждает: не договорились → accepted -> cancelled → 0 баллов
-  bot.action(/S_REQ_CANCEL_([0-9a-fA-F-]{36})/, async (ctx) => {
+  bot.action(/T_LEAD_PAY_CARD_([0-9a-fA-F-]{36})/, async (ctx) => {
     const reqId = ctx.match[1];
     await ctx.answerCbQuery();
 
-    const updated = await ext.updateRequestStatusGuard(reqId, "student_id", ctx.from.id, "accepted", "cancelled");
-    if (!updated) return ctx.reply("Цю дію вже виконано або заявка не в статусі 'accepted'.");
+    if (!CARD_PROVIDER_TOKEN) {
+      await ctx.reply("Оплата карткою поки не налаштована (CARD_PROVIDER_TOKEN).");
+      return;
+    }
 
-    try {
-      await bot.telegram.sendMessage(
-        updated.teacher_id,
-        `ℹ️ Учень позначив: не домовились.\nПредмет: ${updated.subject || "—"}`
-      );
-    } catch (e) {}
+    const req = await store.getRequestById(reqId);
+    if (!req) return ctx.reply("Заявку не знайдено.");
+    if (String(req.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
+    if (req.lead_paid) return ctx.reply("Цей лід вже оплачено ✅");
+    if (req.status !== "accepted") return ctx.reply("Оплата доступна лише після прийняття заявки.");
 
-    await ctx.editMessageText("Ок. Позначив як: не домовились.");
+    await sendLeadInvoiceCard(ctx, reqId, CARD_PROVIDER_TOKEN);
   });
 }
 

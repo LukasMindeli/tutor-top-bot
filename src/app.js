@@ -15,7 +15,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const CARD_PROVIDER_TOKEN = process.env.CARD_PROVIDER_TOKEN || "";
 
 // runtime session
-const session = new Map(); // userId -> state
+const session = new Map();
 function getSession(userIdRaw) {
   const userId = String(userIdRaw);
   session.set(userId, session.get(userId) || {});
@@ -30,17 +30,14 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-// util
 bot.command("myid", async (ctx) => {
   await ctx.reply(`Твій Telegram ID: ${ctx.from.id}`);
 });
 
-// /start всегда спрашивает режим
 bot.start(async (ctx) => {
   await ctx.reply("Хто ти зараз? Обери режим:", ui.modeKeyboard());
 });
 
-// смена режима
 bot.action("CHOOSE_MODE", async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.editMessageText("Хто ти зараз? Обери режим:", ui.modeKeyboard());
@@ -76,48 +73,14 @@ bot.action("BACK_MENU", async (ctx) => {
   await ctx.editMessageText("Головне меню:", ui.mainMenu(s.mode));
 });
 
-// 1) админ регистрируем ПЕРВЫМ (чтобы его text-step не ломал остальное)
-registerAdmin(bot, {
-  store,
-  ui,
-  getSession,
-  SUBJECT_LABELS,
-  searchSubjects,
-  PROMO_PACKS,
-});
+// админ первым
+registerAdmin(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects, PROMO_PACKS });
 
-// 2) остальная логика
-registerTeacher(bot, {
-  store,
-  ui,
-  PROMO_PACKS,
-  LIMITS,
-  CARD_PROVIDER_TOKEN,
-  getSession,
-  SUBJECT_LABELS,
-  searchSubjects,
-});
-
-registerStudent(bot, {
-  store,
-  ui,
-  getSession,
-  SUBJECT_LABELS,
-  searchSubjects,
-});
-
-registerRequests(bot, {
-  store,
-  ui,
-  getUserSession: getSession,
-  LIMITS,
-});
-
-registerPayments(bot, {
-  store,
-  ui,
-  getSession,
-});
+// остальное
+registerTeacher(bot, { store, ui, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getSession, SUBJECT_LABELS, searchSubjects });
+registerStudent(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects });
+registerRequests(bot, { store, ui, getUserSession: getSession, LIMITS, CARD_PROVIDER_TOKEN });
+registerPayments(bot, { store, ui, getSession, CARD_PROVIDER_TOKEN });
 
 bot.launch();
 console.log("Bot is running...");

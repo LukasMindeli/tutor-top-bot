@@ -1,4 +1,5 @@
 const { supabase } = require("./supabase");
+const { LEAD_POINTS_REWARD } = require("./constants");
 
 function isoNow() { return new Date().toISOString(); }
 
@@ -40,28 +41,22 @@ async function getUserMeta(telegramId) {
 }
 
 async function ensureTeacherProfile(telegramId) {
-  // создаём пустой профиль если нет (чтобы дальше update работал)
-  const { data } = await supabase
+  const tid = String(telegramId);
+
+  const { error } = await supabase
     .from("teacher_profiles")
-    .select("telegram_id")
-    .eq("telegram_id", String(telegramId))
-    .maybeSingle();
+    .upsert(
+      { telegram_id: tid, is_active: false, points: 0, paid_students_count: 0 },
+      { onConflict: "telegram_id" }
+    );
 
-  if (data?.telegram_id) return;
-
-  const { error } = await supabase.from("teacher_profiles").insert({
-    telegram_id: String(telegramId),
-    is_active: false,
-    points: 0,
-  });
-
-  if (error) console.error("ensureTeacherProfile insert error:", error.message);
+  if (error) console.error("ensureTeacherProfile error:", error.message);
 }
 
 async function getTeacherProfile(telegramId) {
   const { data, error } = await supabase
     .from("teacher_profiles")
-    .select("telegram_id, subject, price, bio, is_active, photo_file_id, points")
+    .select("telegram_id, subject, price, bio, is_active, photo_file_id, points, paid_students_count")
     .eq("telegram_id", String(telegramId))
     .maybeSingle();
 
@@ -82,23 +77,12 @@ async function updateTeacherProfile(telegramId, patch) {
   if (error) console.error("updateTeacherProfile error:", error.message);
 }
 
-async function setTeacherPoints(telegramId, points) {
-  await ensureTeacherProfile(telegramId);
-  const { error } = await supabase
-    .from("teacher_profiles")
-    .update({ points: points, updated_at: isoNow() })
-    .eq("telegram_id", String(telegramId));
-  if (error) console.error("setTeacherPoints error:", error.message);
-}
-
 async function deleteTeacherProfile(telegramId) {
   const tid = String(telegramId);
 
-  // удаляем промо и заявки учителя
   await supabase.from("teacher_promos").delete().eq("telegram_id", tid);
   await supabase.from("requests").delete().eq("teacher_id", tid);
 
-  // удаляем профиль
   const { error } = await supabase.from("teacher_profiles").delete().eq("telegram_id", tid);
   if (error) console.error("deleteTeacherProfile error:", error.message);
 }
@@ -132,7 +116,7 @@ async function getActivePromoForTeacher(telegramId, subject) {
 async function listTeachersBySubject(subjectLabel) {
   const { data, error } = await supabase
     .from("teacher_profiles")
-    .select("telegram_id, subject, price, bio, is_active, photo_file_id, points, users:users!teacher_profiles_telegram_id_fkey(first_name, username)")
+    .select("telegram_id, subject, price, bio, is_active, photo_file_id, points, paid_students_count, users:users!teacher_profiles_telegram_id_fkey(first_name, username)")
     .eq("is_active", true)
     .eq("subject", subjectLabel);
 
@@ -141,10 +125,8 @@ async function listTeachersBySubject(subjectLabel) {
     return [];
   }
 
-  const profiles = (data || [])
-    .filter((x) => x.price != null && x.bio != null); // простая защита
+  const profiles = (data || []).filter((x) => x.price != null && x.bio != null);
 
-  // активные промо по предмету
   const now = isoNow();
   const { data: promos, error: promoErr } = await supabase
     .from("teacher_promos")
@@ -154,7 +136,6 @@ async function listTeachersBySubject(subjectLabel) {
 
   if (promoErr) console.error("promos load error:", promoErr.message);
 
-  // map teacher -> max expires
   const topMap = new Map();
   for (const p of promos || []) {
     const tid = String(p.telegram_id);
@@ -165,8 +146,10 @@ async function listTeachersBySubject(subjectLabel) {
   const items = profiles.map((p) => {
     const tid = String(p.telegram_id);
     const points = Number.isFinite(p.points) ? p.points : 0;
+    const paidCount = Number.isFinite(p.paid_students_count) ? p.paid_students_count : 0;
     const name = (p.users?.first_name || "").toLowerCase();
     const topUntil = topMap.get(tid) || null;
+
     return {
       telegram_id: tid,
       first_name: p.users?.first_name || null,
@@ -176,6 +159,7 @@ async function listTeachersBySubject(subjectLabel) {
       bio: p.bio,
       photo_file_id: p.photo_file_id || null,
       points,
+      paid_students_count: paidCount,
       is_top: !!topUntil,
       top_until: topUntil,
       _name: name,
@@ -212,6 +196,7 @@ async function createRequest(teacherId, studentId, subject) {
       student_id: String(studentId),
       subject: subject || null,
       status: "pending",
+      lead_paid: false,
     })
     .select("id")
     .single();
@@ -226,7 +211,7 @@ async function createRequest(teacherId, studentId, subject) {
 async function getRequestById(reqId) {
   const { data, error } = await supabase
     .from("requests")
-    .select("id, teacher_id, student_id, subject, status, created_at")
+    .select("id, teacher_id, student_id, subject, status, lead_paid, lead_paid_at")
     .eq("id", reqId)
     .maybeSingle();
 
@@ -240,11 +225,51 @@ async function updateRequestStatus(reqId, teacherId, status) {
     .update({ status, updated_at: isoNow() })
     .eq("id", reqId)
     .eq("teacher_id", String(teacherId))
+    .eq("status", "pending")
     .select("id, teacher_id, student_id, subject, status")
     .maybeSingle();
 
   if (error) console.error("updateRequestStatus error:", error.message);
   return data || null;
+}
+
+// отмечаем лид оплаченным 1 раз + начисляем points + paid_students_count
+async function markLeadPaid(reqId, teacherId, method, chargeId) {
+  const tid = String(teacherId);
+
+  const { data: req, error: reqErr } = await supabase
+    .from("requests")
+    .update({
+      lead_paid: true,
+      lead_paid_at: isoNow(),
+      lead_charge_id: chargeId || null,
+      lead_pay_method: method || null,
+      updated_at: isoNow(),
+    })
+    .eq("id", reqId)
+    .eq("teacher_id", tid)
+    .eq("lead_paid", false)
+    .select("id, teacher_id, student_id, subject, status, lead_paid")
+    .maybeSingle();
+
+  if (reqErr) {
+    console.error("markLeadPaid request update error:", reqErr.message);
+    return null;
+  }
+  if (!req) return null;
+
+  await ensureTeacherProfile(tid);
+  const prof = await getTeacherProfile(tid);
+
+  const curPts = Number.isFinite(prof?.points) ? prof.points : 0;
+  const curCnt = Number.isFinite(prof?.paid_students_count) ? prof.paid_students_count : 0;
+
+  const nextPts = curPts + LEAD_POINTS_REWARD;
+  const nextCnt = curCnt + 1;
+
+  await updateTeacherProfile(tid, { points: nextPts, paid_students_count: nextCnt });
+
+  return { nextPts, nextCnt, req };
 }
 
 module.exports = {
@@ -255,7 +280,6 @@ module.exports = {
   ensureTeacherProfile,
   getTeacherProfile,
   updateTeacherProfile,
-  setTeacherPoints,
   deleteTeacherProfile,
 
   addPromo,
@@ -266,4 +290,6 @@ module.exports = {
   createRequest,
   getRequestById,
   updateRequestStatus,
+
+  markLeadPaid,
 };
