@@ -5,6 +5,7 @@ const { PROMO_PACKS, LIMITS } = require("./constants");
 const { SUBJECT_LABELS } = require("./subjects");
 const { searchSubjects } = require("./subjectSearch");
 
+const { registerAdmin } = require("./admin");
 const { registerTeacher } = require("./teacher");
 const { registerStudent } = require("./student");
 const { registerRequests } = require("./requests");
@@ -14,7 +15,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const CARD_PROVIDER_TOKEN = process.env.CARD_PROVIDER_TOKEN || "";
 
 // runtime session
-const session = new Map(); // userId -> { mode, step, pendingPromo, lastStudentSubject, tutorList, subjQuery, subjOffset }
+const session = new Map(); // userId -> state
 function getSession(userIdRaw) {
   const userId = String(userIdRaw);
   session.set(userId, session.get(userId) || {});
@@ -27,6 +28,11 @@ bot.use(async (ctx, next) => {
     await store.upsertUserMeta(ctx.from.id, ctx.from.first_name, ctx.from.username);
   }
   return next();
+});
+
+// util
+bot.command("myid", async (ctx) => {
+  await ctx.reply(`Твій Telegram ID: ${ctx.from.id}`);
 });
 
 // /start всегда спрашивает режим
@@ -70,7 +76,17 @@ bot.action("BACK_MENU", async (ctx) => {
   await ctx.editMessageText("Головне меню:", ui.mainMenu(s.mode));
 });
 
-// модули
+// 1) админ регистрируем ПЕРВЫМ (чтобы его text-step не ломал остальное)
+registerAdmin(bot, {
+  store,
+  ui,
+  getSession,
+  SUBJECT_LABELS,
+  searchSubjects,
+  PROMO_PACKS,
+});
+
+// 2) остальная логика
 registerTeacher(bot, {
   store,
   ui,

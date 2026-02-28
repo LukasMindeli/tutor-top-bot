@@ -27,7 +27,6 @@ function registerRequests(bot, deps) {
 
     const studentMeta = await store.getUserMeta(ctx.from.id);
     const studentName = studentMeta?.first_name || "Учень";
-    const studentUsername = studentMeta?.username || null;
 
     try {
       await bot.telegram.sendMessage(
@@ -45,8 +44,18 @@ function registerRequests(bot, deps) {
     const reqId = ctx.match[1];
     await ctx.answerCbQuery();
 
+    const current = await store.getRequestById(reqId);
+    if (!current) return ctx.reply("Заявку не знайдено.");
+    if (String(current.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
+    if (current.status !== "pending") return ctx.reply("Ця заявка вже оброблена.");
+
     const req = await store.updateRequestStatus(reqId, ctx.from.id, "accepted");
-    if (!req) return ctx.reply("Не вдалося оновити заявку (можливо не твоя).");
+    if (!req) return ctx.reply("Не вдалося оновити заявку.");
+
+    // +1 бал за прийняття заявки
+    const prof = await store.getTeacherProfile(ctx.from.id);
+    const curPts = Number.isFinite(prof?.points) ? prof.points : 0;
+    await store.updateTeacherProfile(ctx.from.id, { points: curPts + 1 });
 
     const teacherMeta = await store.getUserMeta(ctx.from.id);
     const teacherLink = tgUserLink(ctx.from.id, teacherMeta?.username);
@@ -58,7 +67,7 @@ function registerRequests(bot, deps) {
       );
     } catch (e) {}
 
-    await ctx.editMessageText(`✅ Прийнято\nID: ${reqId}`);
+    await ctx.editMessageText(`✅ Прийнято\n(+1 бал)`);
   });
 
   // учитель відхилив
@@ -66,8 +75,13 @@ function registerRequests(bot, deps) {
     const reqId = ctx.match[1];
     await ctx.answerCbQuery();
 
+    const current = await store.getRequestById(reqId);
+    if (!current) return ctx.reply("Заявку не знайдено.");
+    if (String(current.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
+    if (current.status !== "pending") return ctx.reply("Ця заявка вже оброблена.");
+
     const req = await store.updateRequestStatus(reqId, ctx.from.id, "declined");
-    if (!req) return ctx.reply("Не вдалося оновити заявку (можливо не твоя).");
+    if (!req) return ctx.reply("Не вдалося оновити заявку.");
 
     try {
       await bot.telegram.sendMessage(
@@ -76,7 +90,7 @@ function registerRequests(bot, deps) {
       );
     } catch (e) {}
 
-    await ctx.editMessageText(`❌ Відхилено\nID: ${reqId}`);
+    await ctx.editMessageText("❌ Відхилено");
   });
 }
 
