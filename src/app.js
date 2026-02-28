@@ -1,6 +1,7 @@
 require("dotenv").config();
 const { loadDB, saveDB } = require("./db");
 const { Telegraf, Markup } = require("telegraf");
+const ui = require("./ui");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const CARD_PROVIDER_TOKEN = process.env.CARD_PROVIDER_TOKEN || "";
@@ -120,14 +121,14 @@ bot.use(async (ctx, next) => {
 });
 
 // ====== UI ======
-function modeKeyboard() {
+function ui.modeKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("👨‍🏫 Режим: Учитель", "MODE_TEACHER")],
     [Markup.button.callback("🎓 Режим: Ученик", "MODE_STUDENT")],
   ]);
 }
 
-function mainMenu(mode) {
+function ui.mainMenu(mode) {
   if (mode === "teacher") {
     return Markup.inlineKeyboard([
       [Markup.button.callback("Заполнить/изменить анкету", "T_PROFILE")],
@@ -144,24 +145,24 @@ function mainMenu(mode) {
       [Markup.button.callback("🔁 Сменить режим", "CHOOSE_MODE")],
     ]);
   }
-  return modeKeyboard();
+  return ui.modeKeyboard();
 }
 
-function subjectsKeyboard(prefix, extraButtons = []) {
+function ui.subjectsKeyboard(SUBJECTS,prefix, extraButtons = []) {
   return Markup.inlineKeyboard([
     ...SUBJECTS.map((s) => [Markup.button.callback(s.label, `${prefix}_${s.key}`)]),
     ...extraButtons,
   ]);
 }
 
-function promoPacksKeyboard() {
+function ui.promoPacksKeyboard(PROMO_PACKS) {
   return Markup.inlineKeyboard([
     ...PROMO_PACKS.map((p) => [Markup.button.callback(`${p.days} дней`, `PROMO_DAYS_${p.days}`)]),
     [Markup.button.callback("⬅️ В меню", "BACK_MENU")],
   ]);
 }
 
-function promoPayKeyboard() {
+function ui.promoPayKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("Оплатить ⭐ Stars", "PROMO_PAY_STARS")],
     [Markup.button.callback("Оплатить 💳 картой", "PROMO_PAY_CARD")],
@@ -169,7 +170,7 @@ function promoPayKeyboard() {
   ]);
 }
 
-function backMenuKeyboard() {
+function ui.backMenuKeyboard() {
   return Markup.inlineKeyboard([[Markup.button.callback("⬅️ В меню", "BACK_MENU")]]);
 }
 
@@ -197,12 +198,12 @@ function teacherCard(user) {
 
 // ====== /start ======
 bot.start(async (ctx) => {
-  await ctx.reply("Кто ты сейчас? Выбери режим:", modeKeyboard());
+  await ctx.reply("Кто ты сейчас? Выбери режим:", ui.modeKeyboard());
 });
 
 bot.action("CHOOSE_MODE", async (ctx) => {
   await ctx.answerCbQuery();
-  await ctx.editMessageText("Кто ты сейчас? Выбери режим:", modeKeyboard());
+  await ctx.editMessageText("Кто ты сейчас? Выбери режим:", ui.modeKeyboard());
 });
 
 // ====== режимы ======
@@ -214,7 +215,7 @@ bot.action("MODE_TEACHER", async (ctx) => {
   persist();
 
   await ctx.answerCbQuery();
-  await ctx.editMessageText("Режим: Учитель ✅\n\nГлавное меню:", mainMenu("teacher"));
+  await ctx.editMessageText("Режим: Учитель ✅\n\nГлавное меню:", ui.mainMenu("teacher"));
 });
 
 bot.action("MODE_STUDENT", async (ctx) => {
@@ -225,13 +226,13 @@ bot.action("MODE_STUDENT", async (ctx) => {
   persist();
 
   await ctx.answerCbQuery();
-  await ctx.editMessageText("Режим: Ученик ✅\n\nГлавное меню:", mainMenu("student"));
+  await ctx.editMessageText("Режим: Ученик ✅\n\nГлавное меню:", ui.mainMenu("student"));
 });
 
 bot.action("BACK_MENU", async (ctx) => {
   const s = getSession(ctx.from.id);
   await ctx.answerCbQuery();
-  await ctx.editMessageText("Главное меню:", mainMenu(s.mode));
+  await ctx.editMessageText("Главное меню:", ui.mainMenu(s.mode));
 });
 
 // ====== Учитель: анкета ======
@@ -242,7 +243,7 @@ bot.action("T_PROFILE", async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.editMessageText(
     "Анкета учителя — выбери предмет:",
-    subjectsKeyboard("T_SUBJECT", [[Markup.button.callback("⬅️ В меню", "BACK_MENU")]])
+    ui.subjectsKeyboard(SUBJECTS,"T_SUBJECT", [[Markup.button.callback("⬅️ В меню", "BACK_MENU")]])
   );
 });
 
@@ -261,7 +262,7 @@ bot.action(/T_SUBJECT_(.+)/, async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.editMessageText(
     `Анкета: предмет — ${subjLabel(subject)} ✅\n\nВведи цену за 60 минут (${PRICE_MIN}–${PRICE_MAX}).`,
-    backMenuKeyboard()
+    ui.backMenuKeyboard()
   );
 });
 
@@ -271,7 +272,7 @@ bot.action("T_SHOW_PROFILE", async (ctx) => {
 
   const user = getUser(ctx.from.id);
   await ctx.answerCbQuery();
-  await ctx.editMessageText(teacherCard(user), backMenuKeyboard());
+  await ctx.editMessageText(teacherCard(user), ui.backMenuKeyboard());
 });
 
 bot.action("T_TOGGLE_ACTIVE", async (ctx) => {
@@ -285,7 +286,7 @@ bot.action("T_TOGGLE_ACTIVE", async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.editMessageText(
     `Готово ✅\nТеперь анкета: ${user.teacher.isActive ? "✅ Активна" : "⏸ На паузе"}\n\nГлавное меню:`,
-    mainMenu("teacher")
+    ui.mainMenu("teacher")
   );
 });
 
@@ -319,7 +320,7 @@ bot.action("T_DELETE_CONFIRM", async (ctx) => {
   s.step = null;
 
   await ctx.answerCbQuery();
-  await ctx.editMessageText("Анкета удалена ✅\n\nГлавное меню:", mainMenu("teacher"));
+  await ctx.editMessageText("Анкета удалена ✅\n\nГлавное меню:", ui.mainMenu("teacher"));
 });
 
 // ====== Учитель: ТОП ======
@@ -348,7 +349,7 @@ bot.action("T_PROMO", async (ctx) => {
 
   await ctx.editMessageText(
     `ТОП как у Buki\n\nПредмет: ${subjLabel(subject)}\n${line}\n\nВыбери срок:`,
-    promoPacksKeyboard()
+    ui.promoPacksKeyboard(PROMO_PACKS)
   );
 });
 
@@ -363,7 +364,7 @@ bot.action(/PROMO_DAYS_(\d+)/, async (ctx) => {
   await ctx.answerCbQuery();
 
   if (!pack || !user.teacher.subject) {
-    await ctx.editMessageText("Ошибка выбора пакета.", mainMenu("teacher"));
+    await ctx.editMessageText("Ошибка выбора пакета.", ui.mainMenu("teacher"));
     return;
   }
 
@@ -376,7 +377,7 @@ bot.action(/PROMO_DAYS_(\d+)/, async (ctx) => {
 
   await ctx.editMessageText(
     `Покупка ТОП\n\nПредмет: ${subjLabel(s.pendingPromo.subject)}\nСрок: ${pack.days} дней\nЦена: ${pack.priceUah} грн или ${pack.priceStars} ⭐\n\nВыбери оплату:`,
-    promoPayKeyboard()
+    ui.promoPayKeyboard()
   );
 });
 
@@ -445,7 +446,7 @@ bot.on("successful_payment", async (ctx) => {
   user.promos[subject] = { expiresAt, chargeId: sp.telegram_payment_charge_id };
   persist();
 
-  await ctx.reply(`Оплата прошла ✅\nТОП активен: ${subjLabel(subject)}\nДо: ${fmtDate(expiresAt)}`, mainMenu("teacher"));
+  await ctx.reply(`Оплата прошла ✅\nТОП активен: ${subjLabel(subject)}\nДо: ${fmtDate(expiresAt)}`, ui.mainMenu("teacher"));
 });
 
 // ====== Ученик: поиск ======
@@ -456,7 +457,7 @@ bot.action("S_SEARCH", async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.editMessageText(
     "Выбери предмет:",
-    subjectsKeyboard("S_SUBJECT", [[Markup.button.callback("⬅️ В меню", "BACK_MENU")]])
+    ui.subjectsKeyboard(SUBJECTS,"S_SUBJECT", [[Markup.button.callback("⬅️ В меню", "BACK_MENU")]])
   );
 });
 
@@ -505,7 +506,7 @@ bot.action(/S_SUBJECT_(.+)/, async (ctx) => {
   }
 
   if (!top.length && !regular.length) {
-    await ctx.editMessageText(`По предмету “${subjLabel(subject)}” пока нет активных анкет.`, backMenuKeyboard());
+    await ctx.editMessageText(`По предмету “${subjLabel(subject)}” пока нет активных анкет.`, ui.backMenuKeyboard());
     return;
   }
 
@@ -527,7 +528,7 @@ bot.action(/S_VIEW_(\d+)/, async (ctx) => {
   const teacher = db.users[teacherId];
 
   await ctx.answerCbQuery();
-  if (!teacher) return ctx.editMessageText("Учитель не найден.", backMenuKeyboard());
+  if (!teacher) return ctx.editMessageText("Учитель не найден.", ui.backMenuKeyboard());
 
   const name = teacher.meta?.first_name || "Учитель";
   const price = teacher.teacher?.price ? `${teacher.teacher.price} грн / 60 мин` : "—";
@@ -578,7 +579,7 @@ bot.action(/S_REQ_(\d+)/, async (ctx) => {
     await bot.telegram.sendMessage(teacherId, `📩 Новая заявка от ученика.\nПредмет: ${subjLabel(s.lastStudentSubject || teacher.teacher.subject)}`);
   } catch {}
 
-  await ctx.editMessageText("Заявка отправлена ✅", backMenuKeyboard());
+  await ctx.editMessageText("Заявка отправлена ✅", ui.backMenuKeyboard());
 });
 
 // ====== Текстовые шаги анкеты учителя ======
@@ -610,7 +611,7 @@ bot.on("text", async (ctx) => {
     persist();
 
     s.step = null;
-    await ctx.reply("Описание сохранено ✅\n\nТеперь нажми “Активна/Пауза”, чтобы включиться в поиске.", mainMenu("teacher"));
+    await ctx.reply("Описание сохранено ✅\n\nТеперь нажми “Активна/Пауза”, чтобы включиться в поиске.", ui.mainMenu("teacher"));
     return;
   }
 });
