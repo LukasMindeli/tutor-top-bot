@@ -1,25 +1,14 @@
 require("dotenv").config();
-const fs = require("fs");
+const { loadDB, saveDB } = require("./db");
 const { Telegraf, Markup } = require("telegraf");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const CARD_PROVIDER_TOKEN = process.env.CARD_PROVIDER_TOKEN || "";
 
 // ====== Простая "БД" в файле ======
-const DB_PATH = "./db.json";
-
-function loadDB() {
-  try {
-    if (!fs.existsSync(DB_PATH)) return { users: {}, requests: {} };
-    return JSON.parse(fs.readFileSync(DB_PATH, "utf8"));
-  } catch {
-    return { users: {}, requests: {} };
-  }
-}
-function saveDB() {
-  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), "utf8");
-}
 const db = loadDB();
+
+function persist() { saveDB(db); }
 
 // runtime-сессии
 const session = new Map(); // userId -> { mode, step, pendingPromo, lastStudentSubject }
@@ -125,7 +114,7 @@ bot.use(async (ctx, next) => {
 
     u.meta.first_name = ctx.from.first_name || u.meta.first_name;
     u.meta.username = ctx.from.username || u.meta.username;
-    saveDB();
+    persist();
   }
   return next();
 });
@@ -222,7 +211,7 @@ bot.action("MODE_TEACHER", async (ctx) => {
   const s = getSession(ctx.from.id);
   s.mode = "teacher";
   user.lastMode = "teacher";
-  saveDB();
+  persist();
 
   await ctx.answerCbQuery();
   await ctx.editMessageText("Режим: Учитель ✅\n\nГлавное меню:", mainMenu("teacher"));
@@ -233,7 +222,7 @@ bot.action("MODE_STUDENT", async (ctx) => {
   const s = getSession(ctx.from.id);
   s.mode = "student";
   user.lastMode = "student";
-  saveDB();
+  persist();
 
   await ctx.answerCbQuery();
   await ctx.editMessageText("Режим: Ученик ✅\n\nГлавное меню:", mainMenu("student"));
@@ -265,7 +254,7 @@ bot.action(/T_SUBJECT_(.+)/, async (ctx) => {
   const user = getUser(ctx.from.id);
 
   user.teacher.subject = subject;
-  saveDB();
+  persist();
 
   s.step = "T_WAIT_PRICE";
 
@@ -291,7 +280,7 @@ bot.action("T_TOGGLE_ACTIVE", async (ctx) => {
 
   const user = getUser(ctx.from.id);
   user.teacher.isActive = !user.teacher.isActive;
-  saveDB();
+  persist();
 
   await ctx.answerCbQuery();
   await ctx.editMessageText(
@@ -324,7 +313,7 @@ bot.action("T_DELETE_CONFIRM", async (ctx) => {
   // очистка анкеты
   user.teacher = { subject: null, price: null, bio: null, isActive: false };
   user.promos = {};
-  saveDB();
+  persist();
 
   // сбрасываем шаги анкеты, чтобы не зависло
   s.step = null;
@@ -454,7 +443,7 @@ bot.on("successful_payment", async (ctx) => {
   const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 
   user.promos[subject] = { expiresAt, chargeId: sp.telegram_payment_charge_id };
-  saveDB();
+  persist();
 
   await ctx.reply(`Оплата прошла ✅\nТОП активен: ${subjLabel(subject)}\nДо: ${fmtDate(expiresAt)}`, mainMenu("teacher"));
 });
@@ -580,7 +569,7 @@ bot.action(/S_REQ_(\d+)/, async (ctx) => {
 
   if (!canSendRequest(ctx.from.id)) {
     await ctx.reply("Слишком много заявок за час. Подожди немного и попробуй снова.");
-    saveDB();
+    persist();
     return;
   }
 
@@ -606,7 +595,7 @@ bot.on("text", async (ctx) => {
     if (num < PRICE_MIN || num > PRICE_MAX) return ctx.reply(`Цена должна быть ${PRICE_MIN}–${PRICE_MAX} грн. Напиши заново.`);
 
     user.teacher.price = num;
-    saveDB();
+    persist();
 
     s.step = "T_WAIT_BIO";
     await ctx.reply(`Цена сохранена ✅ ${num} грн / 60 мин\n\nТеперь напиши коротко о себе (1–3 предложения).`);
@@ -618,7 +607,7 @@ bot.on("text", async (ctx) => {
     if (text.length > BIO_MAX) return ctx.reply(`Слишком длинно. До ${BIO_MAX} символов.`);
 
     user.teacher.bio = text;
-    saveDB();
+    persist();
 
     s.step = null;
     await ctx.reply("Описание сохранено ✅\n\nТеперь нажми “Активна/Пауза”, чтобы включиться в поиске.", mainMenu("teacher"));
