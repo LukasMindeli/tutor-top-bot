@@ -31,6 +31,7 @@ function mainMenu(mode, opts = {}) {
       [Markup.button.callback("🟥 ПРАВИЛА (читати)", "RULES")],
       [Markup.button.callback("📝 Заповнити/змінити анкету", "T_PROFILE")],
       [Markup.button.callback("👁️ Моя анкета", "T_SHOW_PROFILE")],
+      [Markup.button.callback("📚 Предмети", "T_SUBJECTS_MENU")],
       [Markup.button.callback("📷 Фото анкети", "T_PHOTO_MENU")],
       [Markup.button.callback(activeLabel, "T_TOGGLE_ACTIVE")],
       [Markup.button.callback("⭐ ТОП", "T_PROMO")],

@@ -15,6 +15,8 @@ const { registerPhotos } = require("./photos");
 const { registerProofs } = require("./proofs");
 const { registerRules } = require("./rules");
 const { registerPromo } = require("./promo");
+const { registerSubjectsManage } = require("./subjects_manage");
+const { registerAdminTopGive } = require("./admin_topgive");
 const { cleanupMiddleware, registerCleanCommands } = require("./clean");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -150,6 +152,8 @@ registerPhotos(bot, { store, ui, getSession });
 registerProofs(bot, { store, ui, getSession });
 
 registerPromo(bot, { store, ui, getSession });
+registerSubjectsManage(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects });
+registerAdminTopGive(bot, { store, ui, getSession });
 
 registerTeacher(bot, { store, ui, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getSession, SUBJECT_LABELS, searchSubjects });
 registerStudent(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects });

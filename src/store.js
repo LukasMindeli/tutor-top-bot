@@ -56,6 +56,8 @@ async function updateTeacherProfile(telegramId, patch) {
   await ensureTeacherProfile(telegramId);
 
   const tid = String(telegramId);
+  if (patch && patch.subject) { try { await addTeacherSubject(telegramId, patch.subject); } catch(e) {} }
+
   const row = { ...patch, updated_at: isoNow() };
 
   const { error } = await supabase.from("teacher_profiles").update(row).eq("telegram_id", tid);
