@@ -1,26 +1,24 @@
-const { replyBottom } = require("./respond");
+function registerRules(bot, deps) {
+  const { ui, getSession } = deps;
 
-const RULES_TEXT =
+  const RULES_TEXT =
 `<b>🟥 Правила TutorUA</b>
 
 1) TutorUA — платформа для звʼязку між учнем і вчителем. Умови та оплату уроків сторони узгоджують напряму.
 2) Заборонено: шахрайство, спам, образи, 18+, незаконний контент.
 3) Анкета має бути чесною: реальна ціна, предмет і короткий опис.
-4) ТОП/бали впливають на порядок показу в пошуку.
+4) ТОП/бали впливають лише на порядок показу в пошуку та не гарантують кількість заявок.
 
 <b>Оплата за учня (лід)</b>
 5) Якщо вчитель домовився з учнем — він <b>зобовʼязаний</b> сплатити 100 грн за учня.
-6) Після підтвердження оплати в анкеті зʼявиться <b>+1 учень</b> та буде нараховано <b>+10 балів</b>.
-Це допоможе підняти анкету вище в рекомендаціях.
+6) Після підтвердження оплати: <b>+1 учень</b> та <b>+10 балів</b> (це піднімає анкету в рекомендаціях).
 
 7) Підтримка: натисни «🆘 Підтримка» і напиши, що сталося.`;
 
-function registerRules(bot, deps) {
-  const { ui, getSession } = deps;
-
   bot.action("RULES", async (ctx) => {
+    await ctx.answerCbQuery();
     const s = getSession(ctx.from.id);
-    await replyBottom(ctx, RULES_TEXT, { parse_mode: "HTML", ...ui.mainMenu(s.mode || "student") });
+    await ctx.editMessageText(RULES_TEXT, { parse_mode: "HTML", ...ui.backMenuKeyboard() });
   });
 }
 

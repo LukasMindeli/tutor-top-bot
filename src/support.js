@@ -1,7 +1,6 @@
-const { Markup } = require("telegraf");
-
 function registerSupport(bot, deps) {
   const { ui, getSession } = deps;
+
   const ADMIN_ID = String(process.env.ADMIN_TELEGRAM_ID || "");
 
   bot.action("SUPPORT", async (ctx) => {
@@ -9,7 +8,8 @@ function registerSupport(bot, deps) {
     const s = getSession(ctx.from.id);
 
     s.step = "SUPPORT_WAIT_TEXT";
-    await ctx.reply(
+
+    await ctx.editMessageText(
       "🆘 Підтримка\n\nНапиши одним повідомленням, що сталося. Я отримаю і відповім.",
       ui.backMenuKeyboard()
     );
@@ -28,7 +28,7 @@ function registerSupport(bot, deps) {
     s.step = null;
 
     if (!ADMIN_ID) {
-      await ctx.reply("Підтримка тимчасово недоступна (ADMIN_TELEGRAM_ID не налаштовано).");
+      await ctx.reply("Підтримка тимчасово недоступна (ADMIN_TELEGRAM_ID не налаштовано).", ui.backMenuKeyboard());
       return;
     }
 
@@ -36,7 +36,7 @@ function registerSupport(bot, deps) {
     const username = ctx.from.username ? `@${ctx.from.username}` : "—";
     const role = s.mode === "teacher" ? "Вчитель" : (s.mode === "student" ? "Учень" : "—");
 
-    const lines =
+    const msg =
       `🆘 Нове звернення\n` +
       `Роль: ${role}\n` +
       `ID: ${ctx.from.id}\n` +
@@ -44,15 +44,9 @@ function registerSupport(bot, deps) {
       `Username: ${username}\n\n` +
       `Повідомлення:\n${text}`;
 
-    const buttons = [];
-    buttons.push([Markup.button.url("Відповісти (чат)", `tg://user?id=${ctx.from.id}`)]);
-    if (ctx.from.username) buttons.push([Markup.button.url("Профіль", `https://t.me/${ctx.from.username}`)]);
+    try { await bot.telegram.sendMessage(ADMIN_ID, msg); } catch (e) {}
 
-    try {
-      await bot.telegram.sendMessage(ADMIN_ID, lines, Markup.inlineKeyboard(buttons));
-    } catch (e) {}
-
-    await ctx.reply("✅ Надіслано. Дякую! Я відповім тобі в Telegram.", ui.mainMenu(s.mode || "student"));
+    await ctx.reply("✅ Надіслано. Дякую! Я відповім тобі в Telegram.", ui.backMenuKeyboard());
   });
 }
 
