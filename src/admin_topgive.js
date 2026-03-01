@@ -2,23 +2,89 @@ const { Markup } = require("telegraf");
 const { supabase } = require("./supabase");
 const { fmtDate } = require("./helpers");
 
-async function listTeacherSubjects(teacherId) {
+function cleanUserArg(raw) {
+  let s = String(raw || "").trim();
+  if (!s) return "";
+  s = s.replace(/^https?:\/\/t\.me\//i, "");
+  s = s.replace(/^t\.me\//i, "");
+  s = s.replace(/^@/, "");
+  return s.trim();
+}
+
+async function resolveTeacherId(arg) {
+  const raw = String(arg || "").trim();
+  if (!raw) return null;
+
+  // 1) если это цифры — уже telegram_id
+  if (/^\d+$/.test(raw)) return raw;
+
+  // 2) иначе это username / @username / t.me/username
+  const uname = cleanUserArg(raw);
+  if (!uname) return null;
+
+  // username в users хранится без @
+  let { data, error } = await supabase
+    .from("users")
+    .select("telegram_id, username")
+    .ilike("username", uname)  // case-insensitive
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error("resolveTeacherId error:", error.message);
+    return null;
+  }
+
+  return data?.telegram_id || null;
+}
+
+async function listTeacherSubjectsWithFallback(teacherId) {
+  // 1) пробуем нормальную таблицу many-to-many
   const { data, error } = await supabase
     .from("teacher_subjects")
     .select("subject")
     .eq("teacher_id", String(teacherId))
     .order("subject", { ascending: true });
-  if (error) return [];
-  return (data || []).map(r => r.subject).filter(Boolean);
+
+  if (error) {
+    console.error("listTeacherSubjects error:", error.message);
+    return [];
+  }
+
+  const subs = (data || []).map(r => r.subject).filter(Boolean);
+  if (subs.length) return subs;
+
+  // 2) fallback: старое поле teacher_profiles.subject (если вдруг учитель ещё не добавлял через 📚 Предмети)
+  const { data: prof, error: pErr } = await supabase
+    .from("teacher_profiles")
+    .select("subject")
+    .eq("telegram_id", String(teacherId))
+    .maybeSingle();
+
+  if (pErr) {
+    console.error("fallback teacher_profiles.subject error:", pErr.message);
+    return [];
+  }
+
+  const one = String(prof?.subject || "").trim();
+  if (!one) return [];
+
+  // сразу мигрируем в teacher_subjects, чтобы дальше всё работало
+  try {
+    await supabase.from("teacher_subjects").insert({ teacher_id: String(teacherId), subject: one });
+  } catch (e) {}
+
+  return [one];
 }
 
 async function addPromo(teacherId, subject, expiresAt) {
-  await supabase.from("teacher_promos").insert({
+  const { error } = await supabase.from("teacher_promos").insert({
     telegram_id: String(teacherId),
     subject,
     expires_at: expiresAt,
     charge_id: "admin_free",
   });
+  if (error) console.error("addPromo error:", error.message);
 }
 
 function registerAdminTopGive(bot, deps) {
@@ -32,19 +98,36 @@ function registerAdminTopGive(bot, deps) {
     return Number.isFinite(s.adminAuthedUntil) && s.adminAuthedUntil > Date.now();
   }
 
+  // /topgive <teacherId|@username|t.me/username> <days>
   bot.command("topgive", async (ctx) => {
     if (!isAdminAuthed(ctx)) return ctx.reply("Адмін: спочатку /admin і пароль.");
 
     const parts = (ctx.message.text || "").trim().split(/\s+/);
-    const teacherId = parts[1];
+    const who = parts[1];
     const days = parseInt(parts[2], 10);
 
-    if (!teacherId || !Number.isFinite(days) || days <= 0) {
-      return ctx.reply("Формат: /topgive <teacherId> <days>\nНапр: /topgive 123456789 7");
+    if (!who || !Number.isFinite(days) || days <= 0) {
+      return ctx.reply(
+        "Формат:\n" +
+        "/topgive <teacherId|@username|t.me/username> <days>\n" +
+        "Приклади:\n" +
+        "/topgive 123456789 7\n" +
+        "/topgive @Trongll 7"
+      );
     }
 
-    const subs = await listTeacherSubjects(teacherId);
-    if (!subs.length) return ctx.reply("У вчителя немає предметів.");
+    const teacherId = await resolveTeacherId(who);
+    if (!teacherId) {
+      return ctx.reply("Не знайшов вчителя за цим ID/username. Переконайся, що він вже взаємодіяв з ботом.");
+    }
+
+    const subs = await listTeacherSubjectsWithFallback(teacherId);
+    if (!subs.length) {
+      return ctx.reply(
+        "У вчителя немає предметів.\n" +
+        "Нехай він додасть їх у «📚 Предмети» (або заповнить анкету), і повтори команду."
+      );
+    }
 
     const s = getSession(ctx.from.id);
     s._topgive = { teacherId, days, subs };
