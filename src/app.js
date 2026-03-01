@@ -1,6 +1,11 @@
 const { Telegraf } = require("telegraf");
 const ui = require("./ui");
 const store = require("./store");
+
+async function teacherMenu(userId) {
+  const p = await store.getTeacherProfile(userId);
+  return ui.mainMenu("teacher", { isActive: !!p?.is_active });
+}
 const { PROMO_PACKS, LIMITS } = require("./constants");
 const { SUBJECT_LABELS } = require("./subjects");
 const { searchSubjects } = require("./subjectSearch");
@@ -73,7 +78,7 @@ bot.action("MODE_TEACHER", async (ctx) => {
   s.mode = "teacher";
   await store.setLastMode(ctx.from.id, "teacher");
 
-  await replyBottom(ctx, "Режим: Вчитель ✅\n\nГоловне меню:", ui.mainMenu("teacher"));
+  await replyBottom(ctx, "Режим: Вчитель ✅\n\nГоловне меню:", await teacherMenu(ctx.from.id));
 });
 
 // student mode — ответ снизу
