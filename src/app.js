@@ -1,5 +1,6 @@
 const { Telegraf } = require("telegraf");
 const ui = require("./ui");
+const { wrapStoreRequestNotifications } = require("./admin_requests_notify");
 const { wrapStoreWithAdminNotifications } = require("./admin_notify");
 const { registerTeacherProfileCard } = require("./profile_multisubject");
 const store = require("./store");

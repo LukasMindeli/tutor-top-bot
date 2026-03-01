@@ -75,7 +75,7 @@ function registerRequests(bot, deps) {
 
     await ctx.editMessageText(
       `✅ Прийнято\n\nКонтакт учня: ${studentLink}\n\n` +
-      `Оплата ЛІДа (добровільно): після підтвердження скріну отримаєш бали та +1 учень.`,
+      `Оплата ЛІДа: після підтвердження скріну отримаєш бали та +1 учень.`,
       Markup.inlineKeyboard(rows)
     );
   });
