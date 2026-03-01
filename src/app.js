@@ -148,6 +148,9 @@ bot.action("T_DELETE_CONFIRM", async (ctx, next) => {
 registerAdmin(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects, PROMO_PACKS });
 registerSupport(bot, { ui, getSession });
 registerRules(bot, { ui, getSession });
+registerSubjectsManage(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects });
+registerPromo(bot, { store, ui, getSession });
+registerAdminTopGive(bot, { store, ui, getSession });
 registerPhotos(bot, { store, ui, getSession });
 registerProofs(bot, { store, ui, getSession });
 
