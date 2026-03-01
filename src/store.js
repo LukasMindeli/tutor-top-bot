@@ -290,3 +290,107 @@ module.exports = {
 
   markLeadPaid,
 };
+
+// MULTISUBJECT_PATCH_START
+// Цей блок не ламає старий код: він просто ПЕРЕВИЗНАЧАЄ exports
+// і робить пошук по предметах через teacher_subjects.
+
+async function listTeacherSubjects(teacherId) {
+  const { data, error } = await supabase
+    .from("teacher_subjects")
+    .select("subject")
+    .eq("teacher_id", String(teacherId))
+    .order("subject", { ascending: true });
+
+  if (error) {
+    console.error("listTeacherSubjects error:", error.message);
+    return [];
+  }
+  return (data || []).map(r => r.subject).filter(Boolean);
+}
+
+async function listTeachersBySubject(subjectLabel) {
+  // 1) Знаходимо всіх вчителів, у яких є цей предмет
+  const { data: ts, error: tsErr } = await supabase
+    .from("teacher_subjects")
+    .select("teacher_id")
+    .eq("subject", subjectLabel);
+
+  if (tsErr) {
+    console.error("teacher_subjects lookup error:", tsErr.message);
+    return [];
+  }
+
+  const ids = (ts || []).map(x => String(x.teacher_id));
+  if (!ids.length) return [];
+
+  // 2) Беремо профілі (лише активні)
+  const { data, error } = await supabase
+    .from("teacher_profiles")
+    .select("telegram_id, price, bio, is_active, photo_file_id, points, paid_students_count, users:users!teacher_profiles_telegram_id_fkey(first_name, username)")
+    .in("telegram_id", ids)
+    .eq("is_active", true);
+
+  if (error) {
+    console.error("teacher_profiles list error:", error.message);
+    return [];
+  }
+
+  const profiles = (data || []).filter(p => p.price != null && p.bio != null);
+
+  // 3) ТОП саме по цьому предмету
+  const now = new Date().toISOString();
+  const { data: promos, error: promoErr } = await supabase
+    .from("teacher_promos")
+    .select("telegram_id, expires_at")
+    .eq("subject", subjectLabel)
+    .gt("expires_at", now);
+
+  if (promoErr) console.error("promos load error:", promoErr.message);
+
+  const topMap = new Map();
+  for (const p of promos || []) {
+    const tid = String(p.telegram_id);
+    const prev = topMap.get(tid);
+    if (!prev || new Date(p.expires_at).getTime() > new Date(prev).getTime()) {
+      topMap.set(tid, p.expires_at);
+    }
+  }
+
+  const items = profiles.map((p) => {
+    const tid = String(p.telegram_id);
+    const points = Number.isFinite(p.points) ? p.points : 0;
+    const paidCnt = Number.isFinite(p.paid_students_count) ? p.paid_students_count : 0;
+    const name = (p.users?.first_name || "").toLowerCase();
+    const topUntil = topMap.get(tid) || null;
+
+    return {
+      telegram_id: tid,
+      first_name: p.users?.first_name || null,
+      username: p.users?.username || null,
+      subject: subjectLabel, // важливо: показуємо предмет, який шукав учень
+      price: p.price,
+      bio: p.bio,
+      photo_file_id: p.photo_file_id || null,
+      points,
+      paid_students_count: paidCnt,
+      is_top: !!topUntil,
+      top_until: topUntil,
+      _name: name,
+    };
+  });
+
+  items.sort((a, b) =>
+    (b.is_top - a.is_top) ||
+    (b.points - a.points) ||
+    a._name.localeCompare(b._name, "uk")
+  );
+
+  return items;
+}
+
+// Перевизначаємо exports (навіть якщо старий store.js мав іншу реалізацію)
+module.exports.listTeacherSubjects = listTeacherSubjects;
+module.exports.listTeachersBySubject = listTeachersBySubject;
+
+// MULTISUBJECT_PATCH_END

@@ -1,5 +1,6 @@
 const { Telegraf } = require("telegraf");
 const ui = require("./ui");
+const { registerTeacherProfileCard } = require("./profile_multisubject");
 const store = require("./store");
 const { PROMO_PACKS, LIMITS } = require("./constants");
 const { SUBJECT_LABELS } = require("./subjects");
@@ -32,6 +33,9 @@ function getSession(userIdRaw) {
   session.set(userId, session.get(userId) || {});
   return session.get(userId);
 }
+
+registerTeacherProfileCard(bot, { store, ui, getSession });
+
 
 async function teacherMenu(userId) {
   const p = await store.getTeacherProfile(userId);
