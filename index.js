@@ -1,2 +1,1 @@
-require("dotenv").config();
-require("./src/app");
+require("./src/launcher");

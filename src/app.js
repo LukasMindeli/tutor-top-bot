@@ -146,12 +146,13 @@ registerStudent(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects });
 registerRequests(bot, { store, ui, getUserSession: getSession, LIMITS, CARD_PROVIDER_TOKEN });
 registerPayments(bot, { store, ui, getSession, CARD_PROVIDER_TOKEN });
 
-bot.launch();
-console.log("Bot is running...");
+// bot.launch(); // moved to src/launcher.jsconsole.log("Bot is running...");
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
-process.once("SIGTERM", () => bot.stop("SIGTERM"));
+// process.once("SIGINT", () => bot.stop("SIGINT"));
+// process.once("SIGTERM", () => bot.stop("SIGTERM"));
 
 bot.command("chatid", async (ctx) => {
   await ctx.reply(`Chat ID: ${ctx.chat.id}`);
 });
+
+module.exports.bot = bot;
