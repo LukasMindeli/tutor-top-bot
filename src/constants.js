@@ -1,7 +1,7 @@
 const PROMO_PACKS = [
-  { days: 7,  priceUah: 199,  priceStars: 120 },
-  { days: 30, priceUah: 499,  priceStars: 300 },
-  { days: 90, priceUah: 1199, priceStars: 800 },
+  { days: 7,  priceUah: 150, priceStars: 120 },
+  { days: 30, priceUah: 400, priceStars: 300 },
+  { days: 90, priceUah: 800, priceStars: 800 },
 ];
 
 const LIMITS = {
@@ -12,11 +12,9 @@ const LIMITS = {
   REQ_LIMIT_PER_HOUR: 10,
 };
 
-/**
- * Лід (оплата за учня) — учитель платить за бажанням.
- */
-const LEAD_PRICE_UAH = 100;     // 100 грн
-const LEAD_PRICE_STARS = 60;    // 60 ⭐ (можеш змінити)
-const LEAD_POINTS_REWARD = 5;   // +5 балів за оплату ліда
+// ЛІД (оплата за учня)
+const LEAD_PRICE_UAH = 100;
+const LEAD_POINTS_REWARD = 10; // +10 балів після підтвердження
+// +1 учень — окремо в paid_students_count (в store.markLeadPaid)
 
-module.exports = { PROMO_PACKS, LIMITS, LEAD_PRICE_UAH, LEAD_PRICE_STARS, LEAD_POINTS_REWARD };
+module.exports = { PROMO_PACKS, LIMITS, LEAD_PRICE_UAH, LEAD_POINTS_REWARD };

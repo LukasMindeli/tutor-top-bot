@@ -15,6 +15,8 @@ const { registerPayments } = require("./payments");
 const { registerSupport } = require("./support");
 const { registerPhotos } = require("./photos");
 const { registerProofs } = require("./proofs");
+const { registerPromo } = require("./promo");
+const { registerTeacherNotify } = require("./teacher_notify");
 const { registerRules } = require("./rules");
 const { cleanupMiddleware, registerCleanCommands } = require("./clean");
 
@@ -99,6 +101,8 @@ registerSupport(bot, { ui, getSession });
 registerRules(bot, { ui, getSession });
 registerPhotos(bot, { store, ui, getSession });
 registerProofs(bot, { store, ui, getSession });
+registerPromo(bot, { store, ui, getSession });
+registerTeacherNotify(bot, { store, ui, getSession });
 
 registerTeacher(bot, { store, ui, PROMO_PACKS, LIMITS, CARD_PROVIDER_TOKEN, getSession, SUBJECT_LABELS, searchSubjects });
 registerStudent(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects });
