@@ -1,3 +1,5 @@
+const { fmtDate } = require("./helpers");
+
 function registerTeacherProfileCard(bot, deps) {
   const { store, ui, getSession } = deps;
 
@@ -8,6 +10,7 @@ function registerTeacherProfileCard(bot, deps) {
 
     const prof = await store.getTeacherProfile(ctx.from.id);
     const subs = (await store.listTeacherSubjects(ctx.from.id)) || [];
+    const promos = (await store.listActivePromosForTeacher(ctx.from.id)) || {};
 
     const active = prof?.is_active ? "✅ Активна" : "⏸ Пауза";
     const price = prof?.price != null ? `${prof.price} грн / 60 хв` : "—";
@@ -16,7 +19,12 @@ function registerTeacherProfileCard(bot, deps) {
     const bio = prof?.bio ? prof.bio : "—";
     const photo = prof?.photo_file_id ? "✅ Є" : "— Немає";
 
-    const subjText = subs.length ? subs.map(x => `• ${x}`).join("\n") : "— (додай у «📚 Предмети»)";
+    const subjText = subs.length
+      ? subs.map(x => {
+          const exp = promos[x];
+          return exp ? `• ${x} ⭐ТОП (до ${fmtDate(exp)})` : `• ${x}`;
+        }).join("\n")
+      : "— (додай у «📚 Предмети»)";
 
     const text =
       `👤 <b>Моя анкета</b>\n\n` +

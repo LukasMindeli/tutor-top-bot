@@ -394,3 +394,32 @@ module.exports.listTeacherSubjects = listTeacherSubjects;
 module.exports.listTeachersBySubject = listTeachersBySubject;
 
 // MULTISUBJECT_PATCH_END
+
+async function listActivePromosForTeacher(teacherId) {
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("teacher_promos")
+    .select("subject, expires_at")
+    .eq("telegram_id", String(teacherId))
+    .gt("expires_at", now);
+
+  if (error) {
+    console.error("listActivePromosForTeacher error:", error.message);
+    return {};
+  }
+
+  // subject -> expires_at (берём самый дальний, если их несколько)
+  const map = {};
+  for (const r of data || []) {
+    const subj = String(r.subject || "").trim();
+    const exp = r.expires_at;
+    if (!subj || !exp) continue;
+
+    if (!map[subj] || new Date(exp).getTime() > new Date(map[subj]).getTime()) {
+      map[subj] = exp;
+    }
+  }
+  return map;
+}
+
+module.exports.listActivePromosForTeacher = listActivePromosForTeacher;
