@@ -150,3 +150,7 @@ console.log("Bot is running...");
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
+
+bot.command("chatid", async (ctx) => {
+  await ctx.reply(`Chat ID: ${ctx.chat.id}`);
+});
