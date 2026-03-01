@@ -1,5 +1,6 @@
 const { Telegraf } = require("telegraf");
 const ui = require("./ui");
+const { wrapStoreWithAdminNotifications } = require("./admin_notify");
 const { registerTeacherProfileCard } = require("./profile_multisubject");
 const store = require("./store");
 const { PROMO_PACKS, LIMITS } = require("./constants");
@@ -42,28 +43,6 @@ async function teacherMenu(userId) {
   return ui.mainMenu("teacher", { isActive: !!p?.is_active });
 }
 
-async function maybeNotifyTeacherCreated(userId) {
-  if (!ADMIN_ID) return;
-  const prof = await store.getTeacherProfile(userId);
-  if (!prof) return;
-
-  const completed = !!(prof.subject && (prof.price ?? null) !== null && prof.bio);
-  if (!completed) return;
-
-  if (prof.admin_notified) return;
-
-  const meta = await store.getUserMeta(userId);
-  const uname = meta?.username ? `@${meta.username}` : "—";
-
-  try {
-    await bot.telegram.sendMessage(
-      ADMIN_ID,
-      `🆕 Створено анкету (Вчитель)\nID: ${userId}\nІм'я: ${meta?.first_name || "—"}\nUsername: ${uname}\nПредмет: ${prof.subject}\nЦіна: ${prof.price} грн`
-    );
-  } catch (e) {}
-
-  await store.updateTeacherProfile(userId, { admin_notified: true });
-}
 
 // сохраняем meta
 bot.use(async (ctx, next) => {
@@ -96,7 +75,6 @@ bot.action("MODE_TEACHER", async (ctx) => {
   await store.setLastMode(ctx.from.id, "teacher");
 
   // ✅ если анкета уже заполнена — уведомим (и только один раз)
-  await maybeNotifyTeacherCreated(ctx.from.id);
 
   await ctx.editMessageText("Режим: Вчитель ✅\n\nГоловне меню:", await teacherMenu(ctx.from.id));
 });
@@ -120,7 +98,6 @@ bot.action("BACK_MENU", async (ctx) => {
 
   if (s.mode === "teacher") {
     // ✅ после заполнения анкеты обычно нажимают "В меню" — тут и прилетит уведомление
-    await maybeNotifyTeacherCreated(ctx.from.id);
     await ctx.editMessageText("Головне меню:", await teacherMenu(ctx.from.id));
   } else {
     await ctx.editMessageText("Головне меню:", ui.mainMenu("student"));
