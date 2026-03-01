@@ -1,6 +1,7 @@
 const { Markup } = require("telegraf");
 
 const DONATE_URL = process.env.ZSU_DONATE_URL || "https://savelife.in.ua/donate/";
+const SUPPORT_URL = process.env.SUPPORT_CONTACT_URL || "";
 
 function modeKeyboard() {
   return Markup.inlineKeyboard([
@@ -9,24 +10,35 @@ function modeKeyboard() {
   ]);
 }
 
+function supportButton() {
+  // если задана ссылка — открываем сразу чат/профиль админа
+  if (SUPPORT_URL) return Markup.button.url("🆘 Підтримка", SUPPORT_URL);
+  // иначе оставляем callback (поддержка через бота)
+  return Markup.button.callback("🆘 Підтримка", "SUPPORT");
+}
+
 function mainMenu(mode) {
   if (mode === "teacher") {
     return Markup.inlineKeyboard([
+      // "красную" кнопку реально нельзя покрасить в Telegram, поэтому делаем максимально заметно
+      [Markup.button.callback("🟥 ПРАВИЛА (читати)", "RULES")],
+
       [Markup.button.callback("📝 Заповнити/змінити анкету", "T_PROFILE")],
       [Markup.button.callback("👁️ Моя анкета", "T_SHOW_PROFILE")],
       [Markup.button.callback("📷 Фото анкети", "T_PHOTO_MENU")],
       [Markup.button.callback("⏯ Активна / Пауза", "T_TOGGLE_ACTIVE")],
       [Markup.button.callback("⭐ ТОП", "T_PROMO")],
-      [Markup.button.callback("🆘 Підтримка", "SUPPORT"), Markup.button.url("💙 Допомога ЗСУ", DONATE_URL)],
+
+      [supportButton(), Markup.button.url("💙 Допомога ЗСУ", DONATE_URL)],
+
       [Markup.button.callback("🗑️ Видалити анкету", "T_DELETE_PROFILE")],
       [Markup.button.callback("🔁 Змінити роль", "CHOOSE_MODE")],
     ]);
   }
 
-  // student
   return Markup.inlineKeyboard([
     [Markup.button.callback("🔎 Знайти репетитора", "S_SEARCH")],
-    [Markup.button.callback("🆘 Підтримка", "SUPPORT"), Markup.button.url("💙 Допомога ЗСУ", DONATE_URL)],
+    [supportButton(), Markup.button.url("💙 Допомога ЗСУ", DONATE_URL)],
     [Markup.button.callback("🔁 Змінити роль", "CHOOSE_MODE")],
   ]);
 }

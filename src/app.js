@@ -13,6 +13,7 @@ const { registerSupport } = require("./support");
 const { registerPhotos } = require("./photos");
 const { registerProofs } = require("./proofs");
 const { registerPayments } = require("./payments");
+const { registerRules } = require("./rules");
 const { cleanupMiddleware, registerCleanCommands } = require("./clean");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
