@@ -1,7 +1,7 @@
 const PROMO_PACKS = [
-  { days: 7,  priceUah: 150, priceStars: 120 },
-  { days: 30, priceUah: 400, priceStars: 300 },
-  { days: 90, priceUah: 800, priceStars: 800 },
+  { days: 7,  priceUah: 150, priceStars: 175 },
+  { days: 30, priceUah: 400, priceStars: 465 },
+  { days: 90, priceUah: 800, priceStars: 930 },
 ];
 
 const LIMITS = {
@@ -14,7 +14,6 @@ const LIMITS = {
 
 // ЛІД (оплата за учня)
 const LEAD_PRICE_UAH = 100;
-const LEAD_POINTS_REWARD = 10; // +10 балів після підтвердження
-// +1 учень — окремо в paid_students_count (в store.markLeadPaid)
+const LEAD_POINTS_REWARD = 10;
 
 module.exports = { PROMO_PACKS, LIMITS, LEAD_PRICE_UAH, LEAD_POINTS_REWARD };

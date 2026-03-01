@@ -1,32 +1,21 @@
 const { Markup } = require("telegraf");
-const proofsStore = require("./store_proofs");
 const { PROMO_PACKS } = require("./constants");
 const { fmtDate } = require("./helpers");
-const { replyBottom } = require("./respond");
 
 function registerPromo(bot, deps) {
   const { store, ui, getSession } = deps;
 
-  const ADMIN_ID = String(process.env.ADMIN_TELEGRAM_ID || "");
-  const MONO_TOP_URL = String(process.env.MONO_TOP_URL || "");
-
-  function isAdmin(ctx) {
-    return ADMIN_ID && String(ctx.from?.id) === ADMIN_ID;
-  }
-  function isAdminAuthed(ctx) {
-    if (!isAdmin(ctx)) return false;
-    const s = getSession(ctx.from.id);
-    return Number.isFinite(s.adminAuthedUntil) && s.adminAuthedUntil > Date.now();
-  }
-
+  // показываем меню ТОП
   bot.action("T_PROMO", async (ctx) => {
+    await ctx.answerCbQuery();
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return ctx.answerCbQuery();
+    if (s.mode !== "teacher") return;
 
     const prof = await store.getTeacherProfile(ctx.from.id);
     const subject = prof?.subject;
+
     if (!subject) {
-      await replyBottom(ctx, "Спочатку заповни анкету (предмет), щоб купити ТОП.", ui.mainMenu("teacher"));
+      await ctx.reply("Спочатку заповни анкету (предмет), щоб купити ТОП.", ui.mainMenu("teacher"));
       return;
     }
 
@@ -34,34 +23,37 @@ function registerPromo(bot, deps) {
     const promoLine = promoUntil ? `⭐ ТОП активний до ${fmtDate(promoUntil)}` : "⭐ ТОП: —";
 
     const rows = PROMO_PACKS.map((p) => [
-      Markup.button.callback(`Купити ТОП: ${p.days} днів — ${p.priceUah} грн`, `TOP_BUY_${p.days}`)
+      Markup.button.callback(
+        `${p.days} днів — ${p.priceUah} грн або ${p.priceStars} ⭐`,
+        `TOP_BUY_${p.days}`
+      ),
     ]);
     rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
 
-    await replyBottom(
-      ctx,
-      `⭐ ТОП репетитора\n\nПредмет: ${subject}\n${promoLine}\n\nОбери термін:`,
+    await ctx.reply(
+      `⭐ ТОП репетитора\n\nПредмет: ${subject}\n${promoLine}\n\nОбери пакет:`,
       Markup.inlineKeyboard(rows)
     );
   });
 
+  // выбор пакета
   bot.action(/TOP_BUY_(\d+)/, async (ctx) => {
+    await ctx.answerCbQuery();
     const s = getSession(ctx.from.id);
-    if (s.mode !== "teacher") return ctx.answerCbQuery();
+    if (s.mode !== "teacher") return;
 
     const days = parseInt(ctx.match[1], 10);
     const pack = PROMO_PACKS.find((p) => p.days === days);
-    if (!pack) return replyBottom(ctx, "Пакет не знайдено.", ui.mainMenu("teacher"));
+    if (!pack) return ctx.reply("Пакет не знайдено.");
 
     const prof = await store.getTeacherProfile(ctx.from.id);
     const subject = prof?.subject;
-    if (!subject) return replyBottom(ctx, "Спочатку заповни анкету (предмет).", ui.mainMenu("teacher"));
+    if (!subject) return ctx.reply("Спочатку заповни анкету (предмет).");
 
     s.topBuy = { subject, days, priceUah: pack.priceUah, priceStars: pack.priceStars };
 
-    await replyBottom(
-      ctx,
-      `⭐ ТОП\nПредмет: ${subject}\nТермін: ${days} днів\nЦіна: ${pack.priceUah} грн\n\nОбери оплату:`,
+    await ctx.reply(
+      `⭐ ТОП\nПредмет: ${subject}\nТермін: ${days} днів\nЦіна: ${pack.priceUah} грн або ${pack.priceStars} ⭐\n\nОбери оплату:`,
       Markup.inlineKeyboard([
         [Markup.button.callback(`Оплатити ⭐ Stars (${pack.priceStars})`, "TOP_PAY_STARS")],
         [Markup.button.callback("Оплатити 💳 карткою (Monobank)", "TOP_PAY_CARD")],
@@ -70,18 +62,69 @@ function registerPromo(bot, deps) {
     );
   });
 
-  // Stars (если у тебя есть обработчик invoices promo — можно подключить позже; пока просто отключим или оставим заглушку)
+  // ===== Stars invoice =====
   bot.action("TOP_PAY_STARS", async (ctx) => {
     await ctx.answerCbQuery();
-    await ctx.reply("Оплата Stars для ТОП буде додана пізніше. Зараз доступна оплата карткою через Monobank.");
+    const s = getSession(ctx.from.id);
+    if (!s.topBuy) return ctx.reply("Спочатку обери пакет ТОП ще раз.");
+
+    const payload = `TOP:${ctx.from.id}:${s.topBuy.days}:${Date.now()}`;
+
+    // ВАЖНО: currency = XTR, provider_token пустой для Stars
+    await ctx.replyWithInvoice({
+      title: "ТОП репетитора (TutorUA)",
+      description: `Предмет: ${s.topBuy.subject}\nТермін: ${s.topBuy.days} днів`,
+      payload,
+      provider_token: "",
+      currency: "XTR",
+      prices: [{ label: `ТОП на ${s.topBuy.days} днів`, amount: s.topBuy.priceStars }],
+    });
   });
 
-  // Card => Monobank jar + screenshot
-  bot.action("TOP_PAY_CARD", async (ctx) => {
-    const s = getSession(ctx.from.id);
-    await ctx.answerCbQuery();
+  // отвечаем на pre_checkout_query (для Stars)
+  bot.on("pre_checkout_query", async (ctx, next) => {
+    const q = ctx.update.pre_checkout_query;
+    if (!q?.invoice_payload?.startsWith("TOP:")) return next();
 
-    if (!s.topBuy) return ctx.reply("Спочатку обери термін ТОП ще раз.");
+    try {
+      await ctx.answerPreCheckoutQuery(true);
+    } catch (e) {}
+  });
+
+  // успешная оплата Stars -> активируем ТОП сразу
+  bot.on("successful_payment", async (ctx, next) => {
+    const sp = ctx.message.successful_payment;
+    if (!sp || sp.currency !== "XTR") return next();
+
+    const payload = sp.invoice_payload || "";
+    if (!payload.startsWith("TOP:")) return next();
+
+    const parts = payload.split(":");
+    const teacherId = parts[1];
+    const days = parseInt(parts[2], 10);
+
+    // безопасность: оплачивать должен тот же пользователь
+    if (String(ctx.from.id) !== String(teacherId)) return;
+
+    const prof = await store.getTeacherProfile(teacherId);
+    if (!prof?.subject) {
+      await ctx.reply("Оплату отримано, але предмет анкети не знайдено. Заповни анкету й напиши в підтримку.");
+      return;
+    }
+
+    const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    await store.addPromo(String(teacherId), String(prof.subject), expiresAt, sp.telegram_payment_charge_id);
+
+    await ctx.reply(`✅ ТОП активовано\nПредмет: ${prof.subject}\nДо: ${fmtDate(expiresAt)}`, ui.mainMenu("teacher"));
+  });
+
+  // ===== Monobank jar for TOP (ручной скрин) =====
+  bot.action("TOP_PAY_CARD", async (ctx) => {
+    await ctx.answerCbQuery();
+    const s = getSession(ctx.from.id);
+    const MONO_TOP_URL = String(process.env.MONO_TOP_URL || "");
+
+    if (!s.topBuy) return ctx.reply("Спочатку обери пакет ТОП ще раз.");
     if (!MONO_TOP_URL) return ctx.reply("MONO_TOP_URL не налаштовано в Railway.");
 
     await ctx.reply(
@@ -94,117 +137,12 @@ function registerPromo(bot, deps) {
   });
 
   bot.action("TOP_SEND_PROOF", async (ctx) => {
-    const s = getSession(ctx.from.id);
     await ctx.answerCbQuery();
-    if (!s.topBuy) return ctx.reply("Спочатку обери термін ТОП ще раз.");
+    const s = getSession(ctx.from.id);
+    if (!s.topBuy) return ctx.reply("Спочатку обери пакет ТОП ще раз.");
 
     s.step = "T_WAIT_TOP_PAYPROOF";
     await ctx.reply("Надішли ОДНЕ фото (скрін оплати) сюди в чат 📷");
-  });
-
-  // photo handler для ТОП (через next, чтобы не ломать другие фото)
-  bot.on("photo", async (ctx, next) => {
-    const s = getSession(ctx.from.id);
-    if (s.step !== "T_WAIT_TOP_PAYPROOF") return next();
-
-    const top = s.topBuy;
-    s.step = null;
-
-    const photos = ctx.message.photo || [];
-    const best = photos[photos.length - 1];
-    if (!best?.file_id) return ctx.reply("Не зміг прочитати фото. Спробуй ще раз.");
-
-    const result = await proofsStore.createProof({
-      kind: "top",
-      teacher_id: String(ctx.from.id),
-      subject: top.subject,
-      days: top.days,
-      amount_uah: top.priceUah,
-      photo_file_id: best.file_id,
-      status: "pending",
-    });
-
-    if (!result.id) {
-      await ctx.reply(`❌ Помилка: не вдалося зберегти скрін.\nПричина: ${result.error || "невідома"}`);
-      return;
-    }
-
-    await ctx.reply("✅ Скрін відправлено. Очікуй підтвердження адміністратора.");
-
-    if (ADMIN_ID) {
-      try {
-        await bot.telegram.sendPhoto(
-          ADMIN_ID,
-          best.file_id,
-          {
-            caption:
-              `🧾 Підтвердження оплати (ТОП)\n\n` +
-              `Proof: ${result.id}\n` +
-              `Teacher: ${ctx.from.id}\n` +
-              `Предмет: ${top.subject}\n` +
-              `Термін: ${top.days} днів\n` +
-              `Сума: ${top.priceUah} грн`,
-            reply_markup: Markup.inlineKeyboard([
-              [Markup.button.callback("✅ Підтвердити ТОП", `A_TOP_OK_${result.id}`)],
-              [Markup.button.callback("❌ Відхилити", `A_TOP_NO_${result.id}`)],
-            ]).reply_markup,
-          }
-        );
-      } catch (e) {}
-    }
-  });
-
-  bot.action(/A_TOP_OK_([0-9a-fA-F-]{36})/, async (ctx) => {
-    await ctx.answerCbQuery();
-    if (!isAdminAuthed(ctx)) return ctx.reply("Адмін: спочатку /admin і пароль.");
-
-    const proofId = ctx.match[1];
-    const proof = await proofsStore.getProofById(proofId);
-    if (!proof) return ctx.reply("Proof не знайдено.");
-    if (proof.status !== "pending") return ctx.reply("Вже оброблено.");
-
-    const expiresAt = new Date(Date.now() + Number(proof.days) * 24 * 60 * 60 * 1000).toISOString();
-    await store.addPromo(String(proof.teacher_id), String(proof.subject), expiresAt, proofId);
-
-    await proofsStore.setProofStatus(proofId, "approved", ctx.from.id, null);
-
-    try {
-      await bot.telegram.sendMessage(
-        String(proof.teacher_id),
-        `✅ ТОП активовано\nПредмет: ${proof.subject}\nДо: ${fmtDate(expiresAt)}`
-      );
-    } catch (e) {}
-
-    try {
-      await ctx.editMessageCaption((ctx.callbackQuery.message.caption || "") + "\n\n✅ ПІДТВЕРДЖЕНО", {
-        reply_markup: Markup.inlineKeyboard([]).reply_markup,
-      });
-    } catch (e) {}
-  });
-
-  bot.action(/A_TOP_NO_([0-9a-fA-F-]{36})/, async (ctx) => {
-    await ctx.answerCbQuery();
-    if (!isAdminAuthed(ctx)) return ctx.reply("Адмін: спочатку /admin і пароль.");
-
-    const proofId = ctx.match[1];
-    const proof = await proofsStore.getProofById(proofId);
-    if (!proof) return ctx.reply("Proof не знайдено.");
-    if (proof.status !== "pending") return ctx.reply("Вже оброблено.");
-
-    await proofsStore.setProofStatus(proofId, "rejected", ctx.from.id, "Rejected by admin");
-
-    try {
-      await bot.telegram.sendMessage(
-        String(proof.teacher_id),
-        "❌ Скрін оплати ТОП відхилено. Якщо це помилка — надішли інший скрін."
-      );
-    } catch (e) {}
-
-    try {
-      await ctx.editMessageCaption((ctx.callbackQuery.message.caption || "") + "\n\n❌ ВІДХИЛЕНО", {
-        reply_markup: Markup.inlineKeyboard([]).reply_markup,
-      });
-    } catch (e) {}
   });
 }
 
