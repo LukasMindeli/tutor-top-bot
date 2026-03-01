@@ -10,22 +10,14 @@ async function upsertUserMeta(telegramId, firstName, username) {
     username: username || null,
     updated_at: isoNow(),
   };
-
-  const { error } = await supabase
-    .from("users")
-    .upsert(row, { onConflict: "telegram_id" });
-
+  const { error } = await supabase.from("users").upsert(row, { onConflict: "telegram_id" });
   if (error) console.error("upsertUserMeta error:", error.message);
 }
 
 async function setLastMode(telegramId, mode) {
   const { error } = await supabase
     .from("users")
-    .upsert(
-      { telegram_id: String(telegramId), last_mode: mode, updated_at: isoNow() },
-      { onConflict: "telegram_id" }
-    );
-
+    .upsert({ telegram_id: String(telegramId), last_mode: mode, updated_at: isoNow() }, { onConflict: "telegram_id" });
   if (error) console.error("setLastMode error:", error.message);
 }
 
@@ -35,31 +27,27 @@ async function getUserMeta(telegramId) {
     .select("telegram_id, first_name, username, last_mode")
     .eq("telegram_id", String(telegramId))
     .maybeSingle();
-
   if (error) console.error("getUserMeta error:", error.message);
   return data || null;
 }
 
 async function ensureTeacherProfile(telegramId) {
   const tid = String(telegramId);
-
   const { error } = await supabase
     .from("teacher_profiles")
     .upsert(
-      { telegram_id: tid, is_active: false, points: 0, paid_students_count: 0 },
+      { telegram_id: tid, is_active: false, points: 0, paid_students_count: 0, admin_notified: false },
       { onConflict: "telegram_id" }
     );
-
   if (error) console.error("ensureTeacherProfile error:", error.message);
 }
 
 async function getTeacherProfile(telegramId) {
   const { data, error } = await supabase
     .from("teacher_profiles")
-    .select("telegram_id, subject, price, bio, is_active, photo_file_id, points, paid_students_count")
+    .select("telegram_id, subject, price, bio, is_active, photo_file_id, points, paid_students_count, admin_notified")
     .eq("telegram_id", String(telegramId))
     .maybeSingle();
-
   if (error) console.error("getTeacherProfile error:", error.message);
   return data || null;
 }
@@ -67,22 +55,30 @@ async function getTeacherProfile(telegramId) {
 async function updateTeacherProfile(telegramId, patch) {
   await ensureTeacherProfile(telegramId);
 
+  const tid = String(telegramId);
   const row = { ...patch, updated_at: isoNow() };
 
-  const { error } = await supabase
-    .from("teacher_profiles")
-    .update(row)
-    .eq("telegram_id", String(telegramId));
-
+  const { error } = await supabase.from("teacher_profiles").update(row).eq("telegram_id", tid);
   if (error) console.error("updateTeacherProfile error:", error.message);
+
+  // ✅ авто-активация: как только заполнены ключевые поля
+  if (patch && typeof patch.is_active === "undefined") {
+    const prof = await getTeacherProfile(tid);
+    const completed = !!(prof?.subject && (prof?.price ?? null) !== null && prof?.bio);
+    if (completed && prof?.is_active === false) {
+      const { error: actErr } = await supabase
+        .from("teacher_profiles")
+        .update({ is_active: true, updated_at: isoNow() })
+        .eq("telegram_id", tid);
+      if (actErr) console.error("auto-activate error:", actErr.message);
+    }
+  }
 }
 
 async function deleteTeacherProfile(telegramId) {
   const tid = String(telegramId);
-
   await supabase.from("teacher_promos").delete().eq("telegram_id", tid);
   await supabase.from("requests").delete().eq("teacher_id", tid);
-
   const { error } = await supabase.from("teacher_profiles").delete().eq("telegram_id", tid);
   if (error) console.error("deleteTeacherProfile error:", error.message);
 }
@@ -108,7 +104,6 @@ async function getActivePromoForTeacher(telegramId, subject) {
     .order("expires_at", { ascending: false })
     .limit(1)
     .maybeSingle();
-
   if (error) console.error("getActivePromoForTeacher error:", error.message);
   return data?.expires_at || null;
 }
@@ -146,7 +141,7 @@ async function listTeachersBySubject(subjectLabel) {
   const items = profiles.map((p) => {
     const tid = String(p.telegram_id);
     const points = Number.isFinite(p.points) ? p.points : 0;
-    const paidCount = Number.isFinite(p.paid_students_count) ? p.paid_students_count : 0;
+    const paidCnt = Number.isFinite(p.paid_students_count) ? p.paid_students_count : 0;
     const name = (p.users?.first_name || "").toLowerCase();
     const topUntil = topMap.get(tid) || null;
 
@@ -159,7 +154,7 @@ async function listTeachersBySubject(subjectLabel) {
       bio: p.bio,
       photo_file_id: p.photo_file_id || null,
       points,
-      paid_students_count: paidCount,
+      paid_students_count: paidCnt,
       is_top: !!topUntil,
       top_until: topUntil,
       _name: name,
@@ -177,7 +172,6 @@ async function listTeachersBySubject(subjectLabel) {
 
 async function countStudentRequestsLastHour(studentId) {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-
   const { count, error } = await supabase
     .from("requests")
     .select("id", { count: "exact", head: true })
@@ -214,7 +208,6 @@ async function getRequestById(reqId) {
     .select("id, teacher_id, student_id, subject, status, lead_paid, lead_paid_at")
     .eq("id", reqId)
     .maybeSingle();
-
   if (error) console.error("getRequestById error:", error.message);
   return data || null;
 }
@@ -233,7 +226,6 @@ async function updateRequestStatus(reqId, teacherId, status) {
   return data || null;
 }
 
-// отмечаем лид оплаченным 1 раз + начисляем points + paid_students_count
 async function markLeadPaid(reqId, teacherId, method, chargeId) {
   const tid = String(teacherId);
 
@@ -264,10 +256,13 @@ async function markLeadPaid(reqId, teacherId, method, chargeId) {
   const curPts = Number.isFinite(prof?.points) ? prof.points : 0;
   const curCnt = Number.isFinite(prof?.paid_students_count) ? prof.paid_students_count : 0;
 
-  const nextPts = curPts + LEAD_POINTS_REWARD;
+  const nextPts = curPts + (Number.isFinite(LEAD_POINTS_REWARD) ? LEAD_POINTS_REWARD : 10);
   const nextCnt = curCnt + 1;
 
-  await updateTeacherProfile(tid, { points: nextPts, paid_students_count: nextCnt });
+  await supabase
+    .from("teacher_profiles")
+    .update({ points: nextPts, paid_students_count: nextCnt, updated_at: isoNow() })
+    .eq("telegram_id", tid);
 
   return { nextPts, nextCnt, req };
 }
