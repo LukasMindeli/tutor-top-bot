@@ -4,7 +4,6 @@ async function markRequestSent(ctx) {
   try { await ctx.answerCbQuery(); } catch {}
 
   try {
-    // если медиа (фото) -> caption
     if (msg && typeof msg.caption === "string") {
       const base = msg.caption || "";
       const next = base.includes("✅ Заявку надіслано")
@@ -14,7 +13,6 @@ async function markRequestSent(ctx) {
       return;
     }
 
-    // если текст
     if (msg && typeof msg.text === "string") {
       await ctx.editMessageText("✅ Заявку надіслано ✅", { reply_markup: { inline_keyboard: [] } });
       return;
