@@ -37,7 +37,7 @@ function registerRequests(bot, deps) {
       );
     } catch (e) {}
 
-    await ctx.editMessageText("Заявку надіслано ✅", ui.backMenuKeyboard());
+    await markRequestSent(ctx);
   });
 
   bot.action(/T_REQ_ACCEPT_([0-9a-fA-F-]{36})/, async (ctx) => {

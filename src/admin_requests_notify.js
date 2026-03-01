@@ -1,21 +1,31 @@
-function tgLink(user) {
-  if (user?.username) return `https://t.me/${user.username}`;
-  if (user?.telegram_id) return `tg://user?id=${user.telegram_id}`;
+function fmt(u) {
+  if (u?.username) return `@${u.username}`;
+  if (u?.first_name) return u.first_name;
+  if (u?.telegram_id) return String(u.telegram_id);
   return "—";
 }
 
-function fmtUser(user) {
-  const name = user?.first_name || "—";
-  const uname = user?.username ? `@${user.username}` : "";
-  return `${name} ${uname}`.trim();
+function isNumericChatId(x) {
+  return /^-?\d+$/.test(String(x || "").trim());
 }
 
 function wrapStoreRequestNotifications({ store, bot }) {
-  const chatId = String(process.env.ADMIN_REQUESTS_CHAT_ID || process.env.ADMIN_TELEGRAM_ID || "").trim();
-  if (!chatId) return;
+  const groupIdRaw = String(process.env.ADMIN_REQUESTS_CHAT_ID || "").trim();
+  const adminIdRaw = String(process.env.ADMIN_TELEGRAM_ID || "").trim();
+
+  // приоритет: группа → если невалидно, fallback в личку админу
+  const targetChatId = isNumericChatId(groupIdRaw) ? groupIdRaw : (isNumericChatId(adminIdRaw) ? adminIdRaw : "");
+
+  if (!targetChatId) {
+    console.warn("ADMIN notify disabled: no valid ADMIN_REQUESTS_CHAT_ID / ADMIN_TELEGRAM_ID");
+    return;
+  }
 
   const origCreateRequest = store.createRequest?.bind(store);
-  if (!origCreateRequest) return;
+  if (!origCreateRequest) {
+    console.warn("ADMIN notify disabled: store.createRequest not found");
+    return;
+  }
 
   store.createRequest = async (teacherId, studentId, subject) => {
     const reqId = await origCreateRequest(teacherId, studentId, subject);
@@ -25,18 +35,11 @@ function wrapStoreRequestNotifications({ store, bot }) {
       const teacher = await store.getUserMeta(teacherId);
       const student = await store.getUserMeta(studentId);
 
-      const text =
-        `📩 Нова заявка\n` +
-        `Учень: ${fmtUser(student)}\n` +
-        `Контакт учня: ${tgLink(student)}\n\n` +
-        `Вчитель: ${fmtUser(teacher)}\n` +
-        `Контакт вчителя: ${tgLink(teacher)}\n\n` +
-        `Предмет: ${subject || "—"}\n` +
-        `RequestID: ${reqId}`;
+      const msg = `${fmt(student)} послал запрос ${fmt(teacher)} по ${subject || "—"}.`;
 
-      await bot.telegram.sendMessage(chatId, text);
+      await bot.telegram.sendMessage(targetChatId, msg);
     } catch (e) {
-      // молча, чтобы не ломать поток
+      console.error("ADMIN request notify failed:", e?.response?.description || e?.message || e);
     }
 
     return reqId;

@@ -23,6 +23,7 @@ const { registerAdminTopGive } = require("./admin_topgive");
 const { cleanupMiddleware, registerCleanCommands } = require("./clean");
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
+wrapStoreRequestNotifications({ store, bot });
 const CARD_PROVIDER_TOKEN = process.env.CARD_PROVIDER_TOKEN || "";
 const ADMIN_ID = String(process.env.ADMIN_TELEGRAM_ID || "");
 
