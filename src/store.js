@@ -3,6 +3,9 @@ const { LEAD_POINTS_REWARD } = require("./constants");
 
 function isoNow() { return new Date().toISOString(); }
 
+// =====================
+// USERS
+// =====================
 async function upsertUserMeta(telegramId, firstName, username) {
   const row = {
     telegram_id: String(telegramId),
@@ -31,6 +34,53 @@ async function getUserMeta(telegramId) {
   return data || null;
 }
 
+// =====================
+// TEACHER SUBJECTS (multi)
+// =====================
+async function addTeacherSubject(teacherId, subject) {
+  const tid = String(teacherId);
+  const subj = String(subject || "").trim();
+  if (!subj) return;
+
+  const { error } = await supabase
+    .from("teacher_subjects")
+    .upsert({ teacher_id: tid, subject: subj }, { onConflict: "teacher_id,subject" });
+
+  if (error) console.error("addTeacherSubject error:", error.message);
+}
+
+async function removeTeacherSubject(teacherId, subject) {
+  const tid = String(teacherId);
+  const subj = String(subject || "").trim();
+  if (!subj) return;
+
+  const { error } = await supabase
+    .from("teacher_subjects")
+    .delete()
+    .eq("teacher_id", tid)
+    .eq("subject", subj);
+
+  if (error) console.error("removeTeacherSubject error:", error.message);
+}
+
+async function listTeacherSubjects(teacherId) {
+  const tid = String(teacherId);
+  const { data, error } = await supabase
+    .from("teacher_subjects")
+    .select("subject")
+    .eq("teacher_id", tid)
+    .order("subject", { ascending: true });
+
+  if (error) {
+    console.error("listTeacherSubjects error:", error.message);
+    return [];
+  }
+  return (data || []).map(r => r.subject).filter(Boolean);
+}
+
+// =====================
+// TEACHER PROFILE
+// =====================
 async function ensureTeacherProfile(telegramId) {
   const tid = String(telegramId);
   const { error } = await supabase
@@ -43,10 +93,11 @@ async function ensureTeacherProfile(telegramId) {
 }
 
 async function getTeacherProfile(telegramId) {
+  const tid = String(telegramId);
   const { data, error } = await supabase
     .from("teacher_profiles")
     .select("telegram_id, subject, price, bio, is_active, photo_file_id, points, paid_students_count, admin_notified")
-    .eq("telegram_id", String(telegramId))
+    .eq("telegram_id", tid)
     .maybeSingle();
   if (error) console.error("getTeacherProfile error:", error.message);
   return data || null;
@@ -54,19 +105,24 @@ async function getTeacherProfile(telegramId) {
 
 async function updateTeacherProfile(telegramId, patch) {
   await ensureTeacherProfile(telegramId);
-
   const tid = String(telegramId);
-  if (patch && patch.subject) { try { await addTeacherSubject(telegramId, patch.subject); } catch(e) {} }
+
+  // если пришел patch.subject — добавим в teacher_subjects (multi)
+  if (patch && patch.subject) {
+    try { await addTeacherSubject(tid, patch.subject); } catch {}
+  }
 
   const row = { ...patch, updated_at: isoNow() };
-
   const { error } = await supabase.from("teacher_profiles").update(row).eq("telegram_id", tid);
   if (error) console.error("updateTeacherProfile error:", error.message);
 
-  // ✅ авто-активация: как только заполнены ключевые поля
+  // авто-активация: как только заполнены ключевые поля
   if (patch && typeof patch.is_active === "undefined") {
     const prof = await getTeacherProfile(tid);
-    const completed = !!(prof?.subject && (prof?.price ?? null) !== null && prof?.bio);
+    // ВАЖНО: subject legacy может быть пустой — тогда активируем по multi-subject + price + bio
+    const subjList = await listTeacherSubjects(tid);
+    const hasSubj = (prof?.subject && String(prof.subject).trim()) || subjList.length > 0;
+    const completed = !!(hasSubj && (prof?.price ?? null) !== null && prof?.bio);
     if (completed && prof?.is_active === false) {
       const { error: actErr } = await supabase
         .from("teacher_profiles")
@@ -79,12 +135,19 @@ async function updateTeacherProfile(telegramId, patch) {
 
 async function deleteTeacherProfile(telegramId) {
   const tid = String(telegramId);
+
   await supabase.from("teacher_promos").delete().eq("telegram_id", tid);
+  await supabase.from("payment_proofs").delete().eq("teacher_id", tid);
   await supabase.from("requests").delete().eq("teacher_id", tid);
+  await supabase.from("teacher_subjects").delete().eq("teacher_id", tid);
+
   const { error } = await supabase.from("teacher_profiles").delete().eq("telegram_id", tid);
   if (error) console.error("deleteTeacherProfile error:", error.message);
 }
 
+// =====================
+// TOP PROMOS
+// =====================
 async function addPromo(telegramId, subject, expiresAt, chargeId) {
   const { error } = await supabase.from("teacher_promos").insert({
     telegram_id: String(telegramId),
@@ -106,24 +169,67 @@ async function getActivePromoForTeacher(telegramId, subject) {
     .order("expires_at", { ascending: false })
     .limit(1)
     .maybeSingle();
+
   if (error) console.error("getActivePromoForTeacher error:", error.message);
   return data?.expires_at || null;
 }
 
-async function listTeachersBySubject(subjectLabel) {
+async function listActivePromosForTeacher(teacherId) {
+  const now = isoNow();
   const { data, error } = await supabase
-    .from("teacher_profiles")
-    .select("telegram_id, subject, price, bio, is_active, photo_file_id, points, paid_students_count, users:users!teacher_profiles_telegram_id_fkey(first_name, username)")
-    .eq("is_active", true)
-    .eq("subject", subjectLabel);
+    .from("teacher_promos")
+    .select("subject, expires_at")
+    .eq("telegram_id", String(teacherId))
+    .gt("expires_at", now);
 
   if (error) {
-    console.error("listTeachersBySubject error:", error.message);
+    console.error("listActivePromosForTeacher error:", error.message);
+    return {};
+  }
+
+  const map = {};
+  for (const r of data || []) {
+    const subj = String(r.subject || "").trim();
+    const exp = r.expires_at;
+    if (!subj || !exp) continue;
+    if (!map[subj] || new Date(exp).getTime() > new Date(map[subj]).getTime()) map[subj] = exp;
+  }
+  return map;
+}
+
+// =====================
+// SEARCH TEACHERS BY SUBJECT (multi-subject)
+// =====================
+async function listTeachersBySubject(subjectLabel) {
+  // 1) ids by subject
+  const { data: ts, error: tsErr } = await supabase
+    .from("teacher_subjects")
+    .select("teacher_id")
+    .eq("subject", subjectLabel);
+
+  if (tsErr) {
+    console.error("teacher_subjects lookup error:", tsErr.message);
     return [];
   }
 
-  const profiles = (data || []).filter((x) => x.price != null && x.bio != null);
+  const ids = (ts || []).map(x => String(x.teacher_id));
+  if (!ids.length) return [];
 
+  // 2) profiles
+  const { data, error } = await supabase
+    .from("teacher_profiles")
+    .select("telegram_id, subject, price, bio, is_active, photo_file_id, points, paid_students_count, users:users!teacher_profiles_telegram_id_fkey(first_name, username)")
+    .in("telegram_id", ids)
+    .eq("is_active", true);
+
+  if (error) {
+    console.error("teacher_profiles list error:", error.message);
+    return [];
+  }
+
+  const profiles = (data || []).filter(p => p.price != null && p.bio != null);
+
+  // 3) TOP map for this subject
   const now = isoNow();
   const { data: promos, error: promoErr } = await supabase
     .from("teacher_promos")
@@ -151,7 +257,7 @@ async function listTeachersBySubject(subjectLabel) {
       telegram_id: tid,
       first_name: p.users?.first_name || null,
       username: p.users?.username || null,
-      subject: p.subject,
+      subject: subjectLabel, // показываем выбранный предмет
       price: p.price,
       bio: p.bio,
       photo_file_id: p.photo_file_id || null,
@@ -172,6 +278,9 @@ async function listTeachersBySubject(subjectLabel) {
   return items;
 }
 
+// =====================
+// REQUESTS / ANTI-SPAM
+// =====================
 async function countStudentRequestsLastHour(studentId) {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const { count, error } = await supabase
@@ -184,7 +293,30 @@ async function countStudentRequestsLastHour(studentId) {
   return count || 0;
 }
 
-async function createRequest(teacherId, studentId, subject) {
+async function findPendingRequestId(teacherId, studentId, subject) {
+  let q = supabase
+    .from("requests")
+    .select("id")
+    .eq("teacher_id", String(teacherId))
+    .eq("student_id", String(studentId))
+    .eq("status", "pending")
+    .limit(1);
+
+  if (subject == null) q = q.is("subject", null);
+  else q = q.eq("subject", subject);
+
+  const { data, error } = await q.maybeSingle();
+  if (error) console.error("findPendingRequestId error:", error.message);
+  return data?.id || null;
+}
+
+// returns { id, created }
+async function createRequestOnce(teacherId, studentId, subject) {
+  // 1) already exists?
+  const existing = await findPendingRequestId(teacherId, studentId, subject);
+  if (existing) return { id: existing, created: false };
+
+  // 2) try insert
   const { data, error } = await supabase
     .from("requests")
     .insert({
@@ -198,10 +330,24 @@ async function createRequest(teacherId, studentId, subject) {
     .single();
 
   if (error) {
-    console.error("createRequest error:", error.message);
+    // 23505 = unique violation (наш idx_requests_unique_pending)
+    const code = error.code || "";
+    const msg = error.message || "";
+    if (String(code) === "23505" || msg.toLowerCase().includes("duplicate")) {
+      const id2 = await findPendingRequestId(teacherId, studentId, subject);
+      if (id2) return { id: id2, created: false };
+    }
+    console.error("createRequestOnce error:", msg);
     return null;
   }
-  return data?.id || null;
+
+  return { id: data?.id || null, created: true };
+}
+
+// old API (kept)
+async function createRequest(teacherId, studentId, subject) {
+  const r = await createRequestOnce(teacherId, studentId, subject);
+  return r?.id || null;
 }
 
 async function getRequestById(reqId) {
@@ -228,6 +374,9 @@ async function updateRequestStatus(reqId, teacherId, status) {
   return data || null;
 }
 
+// =====================
+// LEAD PAID -> points + paid_students_count
+// =====================
 async function markLeadPaid(reqId, teacherId, method, chargeId) {
   const tid = String(teacherId);
 
@@ -279,147 +428,22 @@ module.exports = {
   updateTeacherProfile,
   deleteTeacherProfile,
 
+  addTeacherSubject,
+  removeTeacherSubject,
+  listTeacherSubjects,
+
   addPromo,
   getActivePromoForTeacher,
+  listActivePromosForTeacher,
+
   listTeachersBySubject,
 
   countStudentRequestsLastHour,
+  findPendingRequestId,
+  createRequestOnce,
   createRequest,
   getRequestById,
   updateRequestStatus,
 
   markLeadPaid,
 };
-
-// MULTISUBJECT_PATCH_START
-// Цей блок не ламає старий код: він просто ПЕРЕВИЗНАЧАЄ exports
-// і робить пошук по предметах через teacher_subjects.
-
-async function listTeacherSubjects(teacherId) {
-  const { data, error } = await supabase
-    .from("teacher_subjects")
-    .select("subject")
-    .eq("teacher_id", String(teacherId))
-    .order("subject", { ascending: true });
-
-  if (error) {
-    console.error("listTeacherSubjects error:", error.message);
-    return [];
-  }
-  return (data || []).map(r => r.subject).filter(Boolean);
-}
-
-async function listTeachersBySubject(subjectLabel) {
-  // 1) Знаходимо всіх вчителів, у яких є цей предмет
-  const { data: ts, error: tsErr } = await supabase
-    .from("teacher_subjects")
-    .select("teacher_id")
-    .eq("subject", subjectLabel);
-
-  if (tsErr) {
-    console.error("teacher_subjects lookup error:", tsErr.message);
-    return [];
-  }
-
-  const ids = (ts || []).map(x => String(x.teacher_id));
-  if (!ids.length) return [];
-
-  // 2) Беремо профілі (лише активні)
-  const { data, error } = await supabase
-    .from("teacher_profiles")
-    .select("telegram_id, price, bio, is_active, photo_file_id, points, paid_students_count, users:users!teacher_profiles_telegram_id_fkey(first_name, username)")
-    .in("telegram_id", ids)
-    .eq("is_active", true);
-
-  if (error) {
-    console.error("teacher_profiles list error:", error.message);
-    return [];
-  }
-
-  const profiles = (data || []).filter(p => p.price != null && p.bio != null);
-
-  // 3) ТОП саме по цьому предмету
-  const now = new Date().toISOString();
-  const { data: promos, error: promoErr } = await supabase
-    .from("teacher_promos")
-    .select("telegram_id, expires_at")
-    .eq("subject", subjectLabel)
-    .gt("expires_at", now);
-
-  if (promoErr) console.error("promos load error:", promoErr.message);
-
-  const topMap = new Map();
-  for (const p of promos || []) {
-    const tid = String(p.telegram_id);
-    const prev = topMap.get(tid);
-    if (!prev || new Date(p.expires_at).getTime() > new Date(prev).getTime()) {
-      topMap.set(tid, p.expires_at);
-    }
-  }
-
-  const items = profiles.map((p) => {
-    const tid = String(p.telegram_id);
-    const points = Number.isFinite(p.points) ? p.points : 0;
-    const paidCnt = Number.isFinite(p.paid_students_count) ? p.paid_students_count : 0;
-    const name = (p.users?.first_name || "").toLowerCase();
-    const topUntil = topMap.get(tid) || null;
-
-    return {
-      telegram_id: tid,
-      first_name: p.users?.first_name || null,
-      username: p.users?.username || null,
-      subject: subjectLabel, // важливо: показуємо предмет, який шукав учень
-      price: p.price,
-      bio: p.bio,
-      photo_file_id: p.photo_file_id || null,
-      points,
-      paid_students_count: paidCnt,
-      is_top: !!topUntil,
-      top_until: topUntil,
-      _name: name,
-    };
-  });
-
-  items.sort((a, b) =>
-    (b.is_top - a.is_top) ||
-    (b.points - a.points) ||
-    a._name.localeCompare(b._name, "uk")
-  );
-
-  return items;
-}
-
-// Перевизначаємо exports (навіть якщо старий store.js мав іншу реалізацію)
-module.exports.listTeacherSubjects = listTeacherSubjects;
-module.exports.listTeachersBySubject = listTeachersBySubject;
-
-// MULTISUBJECT_PATCH_END
-
-async function listActivePromosForTeacher(teacherId) {
-  const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from("teacher_promos")
-    .select("subject, expires_at")
-    .eq("telegram_id", String(teacherId))
-    .gt("expires_at", now);
-
-  if (error) {
-    console.error("listActivePromosForTeacher error:", error.message);
-    return {};
-  }
-
-  // subject -> expires_at (берём самый дальний, если их несколько)
-  const map = {};
-  for (const r of data || []) {
-    const subj = String(r.subject || "").trim();
-    const exp = r.expires_at;
-    if (!subj || !exp) continue;
-
-    if (!map[subj] || new Date(exp).getTime() > new Date(map[subj]).getTime()) {
-      map[subj] = exp;
-    }
-  }
-  return map;
-}
-
-module.exports.listActivePromosForTeacher = listActivePromosForTeacher;
