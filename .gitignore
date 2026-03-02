@@ -4,3 +4,6 @@ node_modules/
 
 # local db
 /db.json
+
+# backups
+*.bak
