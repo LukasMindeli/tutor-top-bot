@@ -21,7 +21,6 @@ async function deleteUser(telegramIdRaw) {
   const telegramId = String(telegramIdRaw || "").trim();
   if (!telegramId) return false;
 
-  // cascade удалит teacher_profiles, promos, requests
   const { error } = await supabase
     .from("users")
     .delete()
@@ -34,4 +33,20 @@ async function deleteUser(telegramIdRaw) {
   return true;
 }
 
-module.exports = { findUserIdByUsername, deleteUser };
+async function setUserBlocked(telegramIdRaw, blocked) {
+  const telegramId = String(telegramIdRaw || "").trim();
+  if (!telegramId) return false;
+
+  const { error } = await supabase
+    .from("users")
+    .update({ is_blocked: !!blocked })
+    .eq("telegram_id", telegramId);
+
+  if (error) {
+    console.error("setUserBlocked error:", error.message);
+    return false;
+  }
+  return true;
+}
+
+module.exports = { findUserIdByUsername, deleteUser, setUserBlocked };

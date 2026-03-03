@@ -11,6 +11,7 @@ const { wrapStoreRequestNotifications } = require("./admin_requests_notify");
 const { wrapStoreWithAdminNotifications } = require("./admin_notify");
 
 const { registerAdmin } = require("./admin");
+const { registerAdminBrowse } = require("./admin_browse");
 const { registerTeacher } = require("./teacher");
 const { registerStudent } = require("./student");
 const { registerRequests } = require("./requests");
@@ -31,7 +32,7 @@ const CARD_PROVIDER_TOKEN = process.env.CARD_PROVIDER_TOKEN || "";
 const bot = new Telegraf(process.env.BOT_TOKEN);
 bot.catch((err) => console.error("BOT_ERROR", err));
 
-// ✅ уведомления create/edit/delete анкеты (без дублей, на hash)
+// ✅ уведомления create/edit/delete анкеты (без дублей)
 wrapStoreWithAdminNotifications({ store, bot, adminId: ADMIN_ID });
 
 // ✅ уведомления о заявках в админ-чат
@@ -52,11 +53,26 @@ async function teacherMenu(userId) {
   return ui.mainMenu("teacher", { isActive: !!p?.is_active });
 }
 
-// сохраняем meta
+// сохраняем meta + блокировка
 bot.use(async (ctx, next) => {
-  if (ctx.from?.id) {
-    await store.upsertUserMeta(ctx.from.id, ctx.from.first_name, ctx.from.username);
+  if (!ctx.from?.id) return next();
+
+  await store.upsertUserMeta(ctx.from.id, ctx.from.first_name, ctx.from.username);
+
+  // кешируем на 60 сек
+  const s = getSession(ctx.from.id);
+  const now = Date.now();
+  if (!s._blockedCheckAt || (now - s._blockedCheckAt) > 60000) {
+    const meta = await store.getUserMeta(ctx.from.id);
+    s.is_blocked = !!meta?.is_blocked;
+    s._blockedCheckAt = now;
   }
+
+  if (s.is_blocked && String(ctx.from.id) !== ADMIN_ID) {
+    try { await ctx.reply("⛔ Ви заблоковані адміністратором."); } catch {}
+    return;
+  }
+
   return next();
 });
 
@@ -108,8 +124,10 @@ bot.action("BACK_MENU", async (ctx) => {
   }
 });
 
-// modules (все 1 раз)
+// modules
 registerAdmin(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects, PROMO_PACKS });
+registerAdminBrowse(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects, PROMO_PACKS });
+
 registerSupport(bot, { ui, getSession });
 registerRules(bot, { ui, getSession });
 registerSubjectsManage(bot, { store, ui, getSession, SUBJECT_LABELS, searchSubjects });
