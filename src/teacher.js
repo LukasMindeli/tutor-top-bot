@@ -1,5 +1,5 @@
 const { Markup } = require("telegraf");
-const { parseNumber, fmtDate } = require("./helpers");
+const { parseNumber, fmtDate, containsPhoneNumber } = require("./helpers");
 const { sendStarsInvoice, sendCardInvoice } = require("./payments");
 
 function buildMatchesKeyboard(prefixPick, moreCb, page, hasMore) {
@@ -317,6 +317,9 @@ function registerTeacher(bot, deps) {
     }
 
     if (s.step === "T_WAIT_BIO") {
+      if (containsPhoneNumber(text)) {
+        return ctx.reply("❌ У описі не можна залишати номер телефону. Прибери телефон і напиши опис ще раз.");
+      }
       if (text.length < LIMITS.BIO_MIN) return ctx.reply(`Занадто коротко. Мінімум ${LIMITS.BIO_MIN} символів.`);
       if (text.length > LIMITS.BIO_MAX) return ctx.reply(`Занадто довго. Максимум ${LIMITS.BIO_MAX} символів.`);
 
