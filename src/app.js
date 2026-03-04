@@ -11,7 +11,7 @@ const { wrapStoreRequestNotifications } = require("./admin_requests_notify");
 const { wrapStoreWithAdminNotifications } = require("./admin_notify");
 
 const { registerAdmin } = require("./admin");
-const { registerAdminBrowse } = require("./admin_browse");
+const { registerAdminBrowse } = require("./admin_browse"); // ✅ має існувати файл src/admin_browse.js
 const { registerTeacher } = require("./teacher");
 const { registerStudent } = require("./student");
 const { registerRequests } = require("./requests");
@@ -46,12 +46,40 @@ function getSession(userIdRaw) {
   return session.get(userId);
 }
 
-registerTeacherProfileCard(bot, { store, ui, getSession });
+// ✅ Сброс любых "режимов ожидания ввода" (чтобы админка не перехватывала ввод Учня)
+function resetTransientState(s) {
+  // student flow
+  s.step = null;
+  s.subjQuery = null;
+  s.subjOffset = 0;
+  s.tutorList = null;
+  s.lastStudentSubject = null;
 
-async function teacherMenu(userId) {
-  const p = await store.getTeacherProfile(userId);
-  return ui.mainMenu("teacher", { isActive: !!p?.is_active });
+  // promo flow
+  s.topSubjQuery = null;
+  s.topSubjOffset = 0;
+  s.topSubjects = null;
+  s.topBuy = null;
+  s.topSubject = null;
+  s.pendingPromo = null;
+
+  // proof/photo
+  s.leadProofReqId = null;
+
+  // admin flow (ВАЖНО!)
+  s.adminStep = null;
+  s.adminTargetId = null;
+
+  // caches
+  s._subjList = null;
+  s._subjMatches = null;
+  s._topgive = null;
+
+  // admin browse
+  s.adminBrowse = null;
 }
+
+registerTeacherProfileCard(bot, { store, ui, getSession });
 
 // сохраняем meta + блокировка
 bot.use(async (ctx, next) => {
@@ -82,6 +110,10 @@ registerCleanCommands(bot, getSession);
 
 // start
 bot.start(async (ctx) => {
+  const s = getSession(ctx.from.id);
+  resetTransientState(s);
+  s.mode = null;
+
   const name = ctx.from?.first_name ? `, ${ctx.from.first_name}` : "";
   await ctx.reply(`Привіт${name}! 👋 Я TutorUA.\n\nДопоможу знайти репетитора або створити анкету вчителя.`);
   await ctx.reply("Хто ти зараз? Обери режим:", ui.modeKeyboard());
@@ -89,21 +121,29 @@ bot.start(async (ctx) => {
 
 bot.action("CHOOSE_MODE", async (ctx) => {
   await ctx.answerCbQuery();
+  const s = getSession(ctx.from.id);
+  resetTransientState(s);
+  s.mode = null;
+
   await ctx.editMessageText("Хто ти зараз? Обери режим:", ui.modeKeyboard());
 });
 
 bot.action("MODE_TEACHER", async (ctx) => {
   await ctx.answerCbQuery();
   const s = getSession(ctx.from.id);
+  resetTransientState(s);
   s.mode = "teacher";
+
   await store.setLastMode(ctx.from.id, "teacher");
-  await ctx.editMessageText("Режим: Вчитель ✅\n\nГоловне меню:", await teacherMenu(ctx.from.id));
+  await ctx.editMessageText("Режим: Вчитель ✅\n\nГоловне меню:", ui.mainMenu("teacher"));
 });
 
 bot.action("MODE_STUDENT", async (ctx) => {
   await ctx.answerCbQuery();
   const s = getSession(ctx.from.id);
+  resetTransientState(s);
   s.mode = "student";
+
   await store.setLastMode(ctx.from.id, "student");
   await ctx.editMessageText("Режим: Учень ✅\n\nГоловне меню:", ui.mainMenu("student"));
 });
@@ -113,15 +153,17 @@ bot.action("BACK_MENU", async (ctx) => {
   const s = getSession(ctx.from.id);
 
   if (!s.mode) {
+    resetTransientState(s);
     await ctx.editMessageText("Хто ти зараз? Обери режим:", ui.modeKeyboard());
     return;
   }
 
-  if (s.mode === "teacher") {
-    await ctx.editMessageText("Головне меню:", await teacherMenu(ctx.from.id));
-  } else {
-    await ctx.editMessageText("Головне меню:", ui.mainMenu("student"));
-  }
+  // важливо: прибираємо адмінські "очікування", щоб не красти ввод предметів
+  const mode = s.mode;
+  resetTransientState(s);
+  s.mode = mode;
+
+  await ctx.editMessageText("Головне меню:", ui.mainMenu(mode));
 });
 
 // modules

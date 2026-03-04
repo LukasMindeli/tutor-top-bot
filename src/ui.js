@@ -19,31 +19,32 @@ function modeKeyboard() {
   ]);
 }
 
-// opts: { isActive?: boolean }
+// opts зарезервовані (щоб не ламати імпорти)
 function mainMenu(mode, opts = {}) {
   if (mode === "teacher") {
-    const activeLabel =
-      typeof opts.isActive === "boolean"
-        ? (opts.isActive ? "⏯ Активна ✅" : "⏯ Пауза ⏸")
-        : "⏯ Активна / Пауза";
-
     return Markup.inlineKeyboard([
       [Markup.button.callback("🟥 ПРАВИЛА (читати)", "RULES")],
       [Markup.button.callback("📝 Заповнити/змінити анкету", "T_PROFILE")],
       [Markup.button.callback("👁️ Моя анкета", "T_SHOW_PROFILE")],
       [Markup.button.callback("📚 Предмети", "T_SUBJECTS_MENU")],
       [Markup.button.callback("📷 Фото анкети", "T_PHOTO_MENU")],
-      [Markup.button.callback(activeLabel, "T_TOGGLE_ACTIVE")],
       [Markup.button.callback("⭐ ТОП", "T_PROMO")],
-      [Markup.button.callback("🆘 Підтримка", "SUPPORT"), Markup.button.url("💙 Допомога ЗСУ", DONATE_URL)],
+      [
+        Markup.button.callback("🆘 Підтримка", "SUPPORT"),
+        Markup.button.url("💙 Допомога ЗСУ", DONATE_URL),
+      ],
       [Markup.button.callback("🗑️ Видалити анкету", "T_DELETE_PROFILE")],
       [Markup.button.callback("🔁 Змінити роль", "CHOOSE_MODE")],
     ]);
   }
 
+  // student
   return Markup.inlineKeyboard([
     [Markup.button.callback("🔎 Знайти репетитора", "S_SEARCH")],
-    [Markup.button.callback("🆘 Підтримка", "SUPPORT"), Markup.button.url("💙 Допомога ЗСУ", DONATE_URL)],
+    [
+      Markup.button.callback("🆘 Підтримка", "SUPPORT"),
+      Markup.button.url("💙 Допомога ЗСУ", DONATE_URL),
+    ],
     [Markup.button.callback("🔁 Змінити роль", "CHOOSE_MODE")],
   ]);
 }
