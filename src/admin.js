@@ -62,13 +62,14 @@ function registerAdmin(bot, deps) {
       `Оберіть дію:`;
 
     const kb = Markup.inlineKeyboard([
-      [Markup.button.callback("🔎 Обрати користувача", "A_PICK_USER")],
-      [Markup.button.callback("🎯 Бали", "A_POINTS")],
-      [Markup.button.callback("⭐ Дати ТОП безкоштовно", "A_TOP")],
-      [Markup.button.callback("🗑️ Видалити акаунт", "A_DELETE")],
-      [Markup.button.callback("🚪 Вийти", "A_LOGOUT")],
-      [Markup.button.callback("⬅️ В меню бота", "BACK_MENU")],
-    ]);
+  [Markup.button.callback("👨‍🏫 Репетитори", "A_BROWSE_START")],
+  [Markup.button.callback("🔎 Обрати користувача", "A_PICK_USER")],
+  [Markup.button.callback("🎯 Бали", "A_POINTS")],
+  [Markup.button.callback("⭐ Дати ТОП безкоштовно", "A_TOP")],
+  [Markup.button.callback("🗑️ Видалити акаунт", "A_DELETE")],
+  [Markup.button.callback("🚪 Вийти", "A_LOGOUT")],
+  [Markup.button.callback("⬅️ В меню бота", "BACK_MENU")],
+]);
 
     if (edit && ctx.editMessageText) return ctx.editMessageText(text, kb);
     return ctx.reply(text, kb);
