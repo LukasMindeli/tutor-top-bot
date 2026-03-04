@@ -1,73 +1,151 @@
-// helpers.js — спільні утиліти (UA)
-// Важливо: цей файл мають використовувати student.js / teacher.js / requests.js / promo.js / admin.js
+const { Markup } = require("telegraf");
+const { tgUserLink } = require("./helpers");
 
-function normalizeSubject(s) {
-  return String(s || "")
-    .trim()
-    .replace(/\s+/g, " ");
+const SENT_TEXT = "✅ Заявка надіслана";
+
+async function markRequestSent(ctx) {
+  const msg = ctx.callbackQuery?.message;
+
+  try { await ctx.answerCbQuery(); } catch {}
+
+  // photo card -> caption
+  try {
+    if (msg && typeof msg.caption === "string") {
+      const base = msg.caption || "";
+      const next = base.includes(SENT_TEXT) ? base : `${base}\n\n${SENT_TEXT}`;
+      await ctx.editMessageCaption(next, { reply_markup: { inline_keyboard: [] } });
+      return;
+    }
+  } catch {}
+
+  // text card
+  try {
+    if (msg && typeof msg.text === "string") {
+      const base = msg.text || "";
+      const next = base.includes(SENT_TEXT) ? base : `${base}\n\n${SENT_TEXT}`;
+      await ctx.editMessageText(next, { reply_markup: { inline_keyboard: [] } });
+      return;
+    }
+  } catch {}
+
+  try { await ctx.reply(SENT_TEXT); } catch {}
 }
 
-function safeText(s, max = 600) {
-  const t = String(s || "").replace(/\s+/g, " ").trim();
-  if (!t) return "";
-  return t.length > max ? t.slice(0, max).trim() : t;
+function registerRequests(bot, deps) {
+  const { store, ui, getUserSession, LIMITS } = deps;
+  const MONO_LEAD_URL = String(process.env.MONO_LEAD_URL || "");
+
+  // STUDENT -> send request
+  bot.action(/S_REQ_(\d+)/, async (ctx) => {
+    const s = getUserSession(ctx.from.id);
+    if (s.mode !== "student") { try { await ctx.answerCbQuery(); } catch {}; return; }
+    try { await ctx.answerCbQuery(); } catch {}
+
+    const teacherId = String(ctx.match[1]);
+    const subject = s.lastStudentSubject || null;
+
+    const cnt = await store.countStudentRequestsLastHour(ctx.from.id);
+    if (cnt >= LIMITS.REQ_LIMIT_PER_HOUR) {
+      await ctx.reply("Забагато заявок за годину. Спробуй пізніше.");
+      return;
+    }
+
+    // ✅ создаём "один раз"
+    const r = await store.createRequestOnce(teacherId, ctx.from.id, subject);
+    if (!r || !r.id) {
+      await ctx.reply("Помилка. Не вдалося створити заявку.");
+      return;
+    }
+
+    // ✅ если created=false -> уже есть pending -> НЕ шлем учителю
+    if (!r.created) {
+      await markRequestSent(ctx);
+      return;
+    }
+
+    // created=true -> шлем учителю 1 раз
+    const studentMeta = await store.getUserMeta(ctx.from.id);
+    const studentName = studentMeta?.first_name || "Учень";
+
+    try {
+      await bot.telegram.sendMessage(
+        teacherId,
+        `📩 Нова заявка\nВід: ${studentName}\nПредмет: ${subject || "—"}\n\nПрийняти заявку?`,
+        ui.requestDecisionKeyboard(r.id)
+      );
+    } catch {}
+
+    await markRequestSent(ctx);
+  });
+
+  // TEACHER -> accept
+  bot.action(/T_REQ_ACCEPT_([0-9a-fA-F-]{36})/, async (ctx) => {
+    const reqId = ctx.match[1];
+    try { await ctx.answerCbQuery(); } catch {}
+
+    const updated = await store.updateRequestStatus(reqId, ctx.from.id, "accepted");
+    if (!updated) {
+      await ctx.reply("Заявка вже оброблена або це не твоя заявка.");
+      return;
+    }
+
+    const teacherMeta = await store.getUserMeta(ctx.from.id);
+    const teacherLink = tgUserLink(ctx.from.id, teacherMeta?.username);
+
+    const studentMeta = await store.getUserMeta(updated.student_id);
+    const studentLink = tgUserLink(updated.student_id, studentMeta?.username);
+
+    // student gets teacher contact
+    try {
+      await bot.telegram.sendMessage(
+        updated.student_id,
+        `✅ Вчитель прийняв заявку!\nПредмет: ${updated.subject || "—"}\n\nКонтакт вчителя: ${teacherLink}`
+      );
+    } catch {}
+
+    // teacher gets student contact + lead payment buttons
+    const rows = [];
+    if (MONO_LEAD_URL) {
+      rows.push([Markup.button.url("💳 Оплатити Monobank (100 грн)", MONO_LEAD_URL)]);
+      rows.push([Markup.button.callback("📷 Надіслати скрін оплати", `T_LEAD_PROOF_${reqId}`)]);
+    }
+    rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
+
+    const text =
+      `✅ Прийнято\n\nКонтакт учня: ${studentLink}\n\n` +
+      `Оплата ЛІДа: після підтвердження скріну отримаєш бали та +1 учень.`;
+
+    try {
+      await ctx.editMessageText(text, Markup.inlineKeyboard(rows));
+    } catch {
+      await ctx.reply(text, Markup.inlineKeyboard(rows));
+    }
+  });
+
+  // TEACHER -> decline
+  bot.action(/T_REQ_DECLINE_([0-9a-fA-F-]{36})/, async (ctx) => {
+    const reqId = ctx.match[1];
+    try { await ctx.answerCbQuery(); } catch {}
+
+    const req = await store.getRequestById(reqId);
+    if (!req) return ctx.reply("Заявку не знайдено.");
+    if (String(req.teacher_id) !== String(ctx.from.id)) return ctx.reply("Це не твоя заявка.");
+    if (req.status !== "pending") return ctx.reply("Ця заявка вже оброблена.");
+
+    await store.updateRequestStatus(reqId, ctx.from.id, "declined");
+
+    try {
+      await bot.telegram.sendMessage(
+        req.student_id,
+        `❌ Вчитель відхилив заявку.\nПредмет: ${req.subject || "—"}`
+      );
+    } catch {}
+
+    try { await ctx.editMessageText("❌ Відхилено"); }
+    catch { await ctx.reply("❌ Відхилено"); }
+  });
+
+  bot.action("IGNORE", async (ctx) => { try { await ctx.answerCbQuery(); } catch {} });
 }
 
-function safeInt(v, { min = null, max = null } = {}) {
-  const n = Number.parseInt(String(v || "").replace(/[^\d-]/g, ""), 10);
-  if (!Number.isFinite(n)) return null;
-  if (min !== null && n < min) return null;
-  if (max !== null && n > max) return null;
-  return n;
-}
-
-function parseNumber(text) {
-  const m = String(text || "").match(/-?\d+/);
-  if (!m) return null;
-  const n = Number.parseInt(m[0], 10);
-  return Number.isFinite(n) ? n : null;
-}
-
-function truncate(s, max = 120) {
-  const t = String(s || "");
-  if (t.length <= max) return t;
-  return t.slice(0, Math.max(0, max - 1)).trimEnd() + "…";
-}
-
-function fmtDate(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yy = String(d.getFullYear());
-  return `${dd}.${mm}.${yy}`;
-}
-
-function tgUserLink(username, telegramId) {
-  const u = String(username || "").trim();
-  if (u) return u.startsWith("@") ? `https://t.me/${u.slice(1)}` : `https://t.me/${u}`;
-  if (telegramId) return `tg://user?id=${telegramId}`;
-  return "";
-}
-
-/**
- * Детектор телефону у біо:
- * якщо в тексті загалом >= 9 цифр → вважаємо що це телефон/карта.
- * Обхід можливий: писати цифри словами, через пробіли/крапки, або картинкою.
- */
-function looksLikePhone(text) {
-  const digits = String(text || "").replace(/\D/g, "");
-  return digits.length >= 9;
-}
-
-module.exports = {
-  normalizeSubject,
-  safeText,
-  safeInt,
-  parseNumber,
-  truncate,
-  fmtDate,
-  tgUserLink,
-  looksLikePhone,
-};
+module.exports = { registerRequests };

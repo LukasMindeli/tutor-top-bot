@@ -33,7 +33,7 @@ async function markRequestSent(ctx) {
 
 function registerRequests(bot, deps) {
   const { store, ui, getUserSession, LIMITS } = deps;
-  const MONO_LEAD_URL = String(process.env.MONO_LEAD_URL || "");
+  const MONO_LEAD_URL = String(process.env.MONO_LEAD_URL || "").trim();
 
   // STUDENT -> send request
   bot.action(/S_REQ_(\d+)/, async (ctx) => {
@@ -57,7 +57,7 @@ function registerRequests(bot, deps) {
       return;
     }
 
-    // ✅ если created=false -> уже есть pending -> НЕ шлем учителю
+    // ✅ если already exists -> НЕ шлем учителю повторно
     if (!r.created) {
       await markRequestSent(ctx);
       return;
@@ -90,29 +90,38 @@ function registerRequests(bot, deps) {
     }
 
     const teacherMeta = await store.getUserMeta(ctx.from.id);
-    const teacherLink = tgUserLink(ctx.from.id, teacherMeta?.username);
+    const teacherUrl = tgUserLink(ctx.from.id, teacherMeta?.username);
 
     const studentMeta = await store.getUserMeta(updated.student_id);
-    const studentLink = tgUserLink(updated.student_id, studentMeta?.username);
+    const studentUrl = tgUserLink(updated.student_id, studentMeta?.username);
 
-    // student gets teacher contact
+    // student gets teacher contact (кнопкой — так надёжнее)
     try {
       await bot.telegram.sendMessage(
         updated.student_id,
-        `✅ Вчитель прийняв заявку!\nПредмет: ${updated.subject || "—"}\n\nКонтакт вчителя: ${teacherLink}`
+        `✅ Вчитель прийняв заявку!\nПредмет: ${updated.subject || "—"}\n\nНатисни кнопку нижче, щоб написати вчителю:`,
+        Markup.inlineKeyboard([
+          [Markup.button.url("✉️ Написати вчителю", teacherUrl)],
+        ])
       );
     } catch {}
 
     // teacher gets student contact + lead payment buttons
     const rows = [];
+
+    // ✅ контакт учня — кнопка
+    rows.push([Markup.button.url("✉️ Написати учню", studentUrl)]);
+
+    // ✅ оплата ліда (через банку + скрін)
     if (MONO_LEAD_URL) {
       rows.push([Markup.button.url("💳 Оплатити Monobank (100 грн)", MONO_LEAD_URL)]);
       rows.push([Markup.button.callback("📷 Надіслати скрін оплати", `T_LEAD_PROOF_${reqId}`)]);
     }
+
     rows.push([Markup.button.callback("⬅️ В меню", "BACK_MENU")]);
 
     const text =
-      `✅ Прийнято\n\nКонтакт учня: ${studentLink}\n\n` +
+      `✅ Прийнято\n\n` +
       `Оплата ЛІДа: після підтвердження скріну отримаєш бали та +1 учень.`;
 
     try {
