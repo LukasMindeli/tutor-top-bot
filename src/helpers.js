@@ -1,40 +1,73 @@
-function pad2(n) {
-  return String(n).padStart(2, "0");
+// helpers.js — спільні утиліти (UA)
+// Важливо: цей файл мають використовувати student.js / teacher.js / requests.js / promo.js / admin.js
+
+function normalizeSubject(s) {
+  return String(s || "")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
-// DD.MM.YYYY
-function fmtDate(value) {
-  if (!value) return "";
-  try {
-    const d = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(d.getTime())) return "";
-    return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()}`;
-  } catch {
-    return "";
-  }
+function safeText(s, max = 600) {
+  const t = String(s || "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length > max ? t.slice(0, max).trim() : t;
 }
 
-// достает число из текста
-function parseNumber(text) {
-  const digits = String(text ?? "").replace(/[^0-9]/g, "");
-  if (!digits) return null;
-  const n = parseInt(digits, 10);
+function safeInt(v, { min = null, max = null } = {}) {
+  const n = Number.parseInt(String(v || "").replace(/[^\d-]/g, ""), 10);
   if (!Number.isFinite(n)) return null;
+  if (min !== null && n < min) return null;
+  if (max !== null && n > max) return null;
   return n;
 }
 
-// обрезка текста
-function truncate(text, max = 600) {
-  const s = String(text ?? "");
-  if (s.length <= max) return s;
-  return s.slice(0, Math.max(0, max - 1)) + "…";
+function parseNumber(text) {
+  const m = String(text || "").match(/-?\d+/);
+  if (!m) return null;
+  const n = Number.parseInt(m[0], 10);
+  return Number.isFinite(n) ? n : null;
 }
 
-// ссылка на юзера
-function tgUserLink(id, username) {
-  const u = (username || "").toString().trim().replace(/^@/, "");
-  if (u) return `https://t.me/${u}`;
-  return `tg://user?id=${id}`;
+function truncate(s, max = 120) {
+  const t = String(s || "");
+  if (t.length <= max) return t;
+  return t.slice(0, Math.max(0, max - 1)).trimEnd() + "…";
 }
 
-module.exports = { fmtDate, parseNumber, truncate, tgUserLink };
+function fmtDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear());
+  return `${dd}.${mm}.${yy}`;
+}
+
+function tgUserLink(username, telegramId) {
+  const u = String(username || "").trim();
+  if (u) return u.startsWith("@") ? `https://t.me/${u.slice(1)}` : `https://t.me/${u}`;
+  if (telegramId) return `tg://user?id=${telegramId}`;
+  return "";
+}
+
+/**
+ * Детектор телефону у біо:
+ * якщо в тексті загалом >= 9 цифр → вважаємо що це телефон/карта.
+ * Обхід можливий: писати цифри словами, через пробіли/крапки, або картинкою.
+ */
+function looksLikePhone(text) {
+  const digits = String(text || "").replace(/\D/g, "");
+  return digits.length >= 9;
+}
+
+module.exports = {
+  normalizeSubject,
+  safeText,
+  safeInt,
+  parseNumber,
+  truncate,
+  fmtDate,
+  tgUserLink,
+  looksLikePhone,
+};
